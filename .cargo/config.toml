@@ -1,0 +1,4 @@
+# Use the official aws-lc-sys prebuilt assembly objects on Windows x86-64
+# when a NASM installation is unavailable. An installed NASM still takes priority.
+[env]
+AWS_LC_SYS_PREBUILT_NASM = { value = "1", force = false }

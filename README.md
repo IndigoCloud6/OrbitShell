@@ -1,0 +1,118 @@
+# OrbitShell
+
+OrbitShell 是面向远程运维的桌面 SSH / SFTP 工作台。你可以从左侧连接树打开服务器，在中间的标签页切换终端，在右侧浏览当前会话的远程文件，并在底部查看传输进度和连接日志。当前主要面向 Windows 10/11。
+
+![OrbitShell 紧凑模式工作台，左侧为连接列表，中间为终端，右侧为远程文件，底部为传输队列](design/implementation-compact.png)
+
+*图中使用虚构连接和文件，来自开发模式的界面比对场景。*
+
+## 从源码启动
+
+Windows 开发环境需要 Node.js 24 LTS、Rust 1.90 或更高版本、带 C++ 桌面开发工具的 Microsoft C++ Build Tools，以及 Microsoft Edge WebView2 Runtime。
+
+在 PowerShell 中运行以下命令。已有源码时，直接在仓库根目录执行最后两行。
+
+```powershell
+git clone https://github.com/IndigoCloud6/OrbitShell.git
+cd OrbitShell
+npm.cmd ci
+npm.cmd run desktop:dev
+```
+
+`desktop:dev` 会启动 Vite、编译 Rust 并打开桌面窗口。仅需预览界面时，可单独运行 `npm.cmd run dev`，然后打开 [localhost:1420](http://localhost:1420)。浏览器预览单独保存演示连接配置。SSH、SFTP、系统凭据库、文件选择器和本机 MCP 服务需要桌面端。
+
+## 第一次连接与文件传输
+
+1. 在桌面端左侧连接列表点击 **新建**，填写连接名称、服务器地址、端口和用户名。分组用于整理连接。
+2. 选择 **密码** 或 **SSH 私钥**。私钥登录需选择本机 OpenSSH 或 PEM 私钥文件，加密私钥还需输入口令。点击 **保存并连接** 开始登录，或点击 **保存连接** 留待以后使用。
+3. 首次连接时，将桌面弹窗中的 SHA-256 主机指纹与服务器管理员提供的指纹核对，一致后再确认。如果已保存的指纹发生变化，OrbitShell 会停止认证。
+4. 连接成功后即可在终端操作。若服务器支持 SFTP，在右侧 **远程文件** 中双击目录或选中后按 Enter 进入。点击 **上传文件** 会上传到当前目录。下载时先单击选中文件，再点 **下载文件** 并选择本地目标。
+
+底部传输队列显示已传字节、速度和任务状态。远端已有同名文件时，上传会失败并保留原文件。下载先写入本地临时文件，写入和刷新完成后才保存到所选位置。切换会话或收起文件面板时，已发起的传输会继续。
+
+## 工作台操作
+
+切换标签或打开设置时，当前 SSH 会话保持连接。要结束连接并保留终端显示，选择 **会话 → 断开连接**。关闭标签会结束该会话并移除标签。刷新整个页面或重启应用后，需要重新连接。
+
+| 操作 | 快捷键 |
+| --- | --- |
+| 新建连接 / 关闭当前会话标签 | `Ctrl + Shift + T` / `Ctrl + Shift + W` |
+| 切换会话标签 | 焦点在标签上时按 `←` / `→`，或用 `Home` / `End` 跳到首尾 |
+| 查找终端内容 | `Ctrl + F`，在查找框按 `Enter` / `Shift + Enter` 切换匹配，`Esc` 关闭 |
+| 复制终端选区 / 粘贴到终端 | `Ctrl + Shift + C` / `Ctrl + Shift + V` |
+| 调节终端字号 | `Ctrl + 加号 / 减号` 或 `Ctrl + 滚轮`，`Ctrl + 0` 恢复默认字号 |
+| 展开或收起连接列表 / 底部工具面板 | `Ctrl + B` / `Ctrl + J` |
+
+在 **设置 → 外观** 可选择深色、浅色或跟随系统，也可将默认的紧凑密度改为舒适密度。终端字号独立保存。远程文件面板可切换列表密度和点号文件的可见性。
+
+## 本地数据与凭据
+
+| 数据 | 保存位置与生命周期 |
+| --- | --- |
+| 连接配置、主机指纹、MCP 访问令牌 | 桌面端保存在 Tauri 应用数据目录的 `workspace.json`。其中的 MCP 令牌用于本机客户端认证，请勿分享该文件。 |
+| SSH 密码、私钥口令 | 默认仅用于本次登录。Windows 桌面端明确勾选记住后，保存到当前系统账户的凭据管理器。其他平台使用一次性输入。 |
+| 私钥文件 | 保留在所选本地路径，连接配置只记录路径。 |
+| 终端输出与连接日志 | 终端缓冲位于内存中。连接日志记录本次运行的会话状态，不保存终端正文。 |
+
+在连接编辑器中勾选记住并点击 **保存连接**，会立即保存输入的凭据。在登录弹窗或 **保存并连接** 流程中勾选记住，则在认证和终端初始化成功后保存。若凭据保存失败，界面会单独提示，已建立的会话仍可使用。
+
+可在编辑或登录时更换、清除已保存的凭据。更改主机、端口、用户名、认证方式、私钥路径或删除连接，都会清除原凭据。修改显示名称或分组会保留凭据。前端可查询凭据是否已保存，已保存的明文仅由 Rust 后端读取。
+
+## 接入 MCP 客户端
+
+在桌面端打开 **设置 → AI 与 MCP**，点击 **开启 MCP**，再点击 **复制 MCP 客户端配置**。将配置填入支持 Streamable HTTP 的 MCP 客户端。每次启动 OrbitShell 后都需要重新开启服务。
+
+服务地址为 `http://127.0.0.1:43123/mcp`，复制的配置已包含 `Authorization: Bearer <访问令牌>` 请求头。服务仅监听本机回环地址，并限制 Host、Origin 和请求体大小。拥有令牌的客户端可操作已连接的终端，请将配置保存在本机受信任的客户端中。
+
+| 工具 | 用途 |
+| --- | --- |
+| `list_connections` | 获取已保存连接的 ID 和目标信息 |
+| `open_connection` | 按连接 ID 发起连接。未提供当次凭据时，桌面端会请求登录 |
+| `list_sessions` | 查询会话 ID 和连接状态，可用于确认登录是否完成 |
+| `execute_command` | 通过独立 SSH exec 通道执行命令，返回标准输出、标准错误和退出码 |
+| `send_input` | 向当前交互终端发送输入，可追加回车 |
+| `read_output` | 按字节游标读取终端输出，缓冲保留最近 1 MiB |
+| `disconnect` | 断开指定会话 |
+
+首次主机指纹确认仍需在桌面完成。只开放交互式 Shell 的堡垒机可通过 `send_input` 和 `read_output` 操作。`execute_command` 默认超时 30 秒，可设为 1 至 300 秒。超时后会请求终止并关闭通道，远端进程的退出行为由服务器决定。
+
+## 堡垒机会话与 Xshell 启动参数
+
+在 **设置 → 堡垒机联动** 中粘贴 SSH 会话链接，点击 **打开会话链接**。外部链接创建临时会话，连接信息和链接中的密码仅用于当次登录。带 `b64>>` 前缀的用户名默认原样发送，需要解码时可在此处显式选择。
+
+从 PowerShell 调用可执行文件时，可使用以下 Xshell 风格的参数。示例使用文档地址，凭据可在桌面端输入。
+
+```powershell
+.\OrbitShell.exe -url "ssh://operator@192.0.2.10:2222"
+.\OrbitShell.exe -url "ssh://operator@192.0.2.10:2222" -newtab "维护会话"
+```
+
+- `-newtab` 可指定标签名称。`-newwin` 当前也会在同一工作台打开标签。
+- 链接解析按最后一个 `@` 分隔主机，支持百分号转义和 IPv6 地址。也可使用嵌套链接，例如 `orbitshell://connect?url=ssh%3A%2F%2Foperator%40192.0.2.10%3A2222`。
+- 要让系统中的 `ssh://` 链接交给 OrbitShell，先点击 **注册 SSH 链接入口**，再在 Windows 默认应用设置中选择 OrbitShell。
+- 项目提供 [Xshell 参数转接器源码](src-tauri/src/bin/xshell.rs)。若运维助手支持指定客户端路径，可选择与 `OrbitShell.exe` 放在同一目录的转接器 `Xshell.exe`。它将参数直接转发给 OrbitShell。
+- 当前兼容范围为会话链接和上述启动参数。真实阿里云堡垒机尚待联调，Xshell 专有加密 `.xsh` 凭据和脚本系统不在当前支持范围内。
+
+## 开发参考
+
+前端采用 React 19、TypeScript、Astryx 和 xterm.js，桌面端采用 Tauri 2 与 Rust。Astryx Core、CLI 与 Neutral 主题统一固定为 `0.7.11`。Windows x64 缺少 NASM 时，仓库的 [Cargo 配置](.cargo/config.toml) 会启用加密依赖自带的预编译汇编文件。
+
+| 在仓库根目录运行 | 用途 |
+| --- | --- |
+| `npm.cmd run desktop:dev` | 启动带热更新的桌面开发环境 |
+| `npm.cmd run dev` | 仅启动 Vite 浏览器预览 |
+| `npm.cmd run typecheck` | 运行 TypeScript 类型检查 |
+| `npm.cmd run test` | 运行 Vitest 测试 |
+| `npm.cmd run build` | 运行类型检查并生成前端产物 `dist/` |
+| `npm.cmd run desktop:build -- --debug --no-bundle` | 构建前端和 Debug 桌面程序，跳过安装包打包 |
+
+| 源码入口 | 职责 |
+| --- | --- |
+| [src/app](src/app) | 路由、主题、界面偏好与会话生命周期的挂载位置 |
+| [workbench](src/features/workbench) · [connections](src/features/connections) | 工作台布局、菜单、连接树、连接编辑与登录 |
+| [terminal](src/features/terminal) · [files](src/features/files) | 终端标签、xterm.js 字节流、SFTP 文件面板和传输队列 |
+| [ssh.rs](src-tauri/src/ssh.rs) · [lib.rs](src-tauri/src/lib.rs) | SSH 认证、PTY、流量控制、桌面命令与 SFTP 传输 |
+| [storage.rs](src-tauri/src/storage.rs) · [credentials.rs](src-tauri/src/credentials.rs) | 本机配置、主机指纹与凭据管理 |
+| [mcp.rs](src-tauri/src/mcp.rs) · [launch.rs](src-tauri/src/launch.rs) | MCP 服务、外部链接与启动参数 |
+
+界面设计稿及同尺寸对照图见 [设计说明](design/README.md)。

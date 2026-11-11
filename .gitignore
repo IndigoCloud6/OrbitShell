@@ -1,0 +1,44 @@
+# 前端依赖、构建产物与缓存
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Rust / Tauri 构建产物与生成的 schema
+/src-tauri/target/
+/src-tauri/gen/schemas/
+
+# 测试覆盖率报告
+coverage/
+
+# 开发日志、PID 与本地工作文件
+/work/
+*.log
+AGENTS.md
+
+# 本地环境配置，保留可提交的示例
+.env
+.env.*
+*.local
+!.env.example
+
+# 本机连接配置、SSH 私钥与证书凭据
+workspace.json
+.ssh/
+*.pem
+*.key
+*.ppk
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+id_ecdsa*
+id_dsa*
+
+# 编辑器临时文件与系统缓存
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
