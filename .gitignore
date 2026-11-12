@@ -24,6 +24,7 @@ AGENTS.md
 
 # 本机连接配置、SSH 私钥与证书凭据
 workspace.json
+file-snapshots/
 .ssh/
 *.pem
 *.key

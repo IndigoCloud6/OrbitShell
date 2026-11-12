@@ -9,7 +9,7 @@ import type {ConnectionProfile} from '../connections/types';
 interface SessionContext {
   sessions: ShellSession[];
   activeId: string | null;
-  setActiveId: (id: string) => void;
+  setActiveId: (id: string | null) => void;
   start: (profile: ConnectionProfile, credential: string, ephemeral?: boolean, options?: AuthenticationOptions) => string;
   close: (id: string) => void;
   getRuntime: (id: string) => TerminalRuntime | undefined;

@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useRef, useState} from 'react';
+import {lazy, Suspense, useCallback, useEffect, useRef, useState} from 'react';
 import {Outlet, useLocation, useNavigate, useSearchParams} from 'react-router';
 import {useQuery} from '@tanstack/react-query';
 import {getCurrentWindow} from '@tauri-apps/api/window';
@@ -21,6 +21,8 @@ import {useTransfers} from '../files/transfer-provider';
 import {usePreferences} from '../../app/preferences';
 import {useThemePreference} from '../../app/theme';
 import {desktopCommand, errorMessage, isDesktop} from '../../shared/desktop';
+import {desktopStatusKey} from '../../shared/desktop-lifecycle';
+import type {DesktopStatus} from '../../shared/desktop-lifecycle';
 import {IdeLayout} from './ide-layout';
 import {ActivityRail, IdeStatusbar, IdeTitlebar, OrbitMark, SessionContextBar} from './ide-chrome';
 import type {IdeMenu, ToolTab} from './ide-chrome';
@@ -29,7 +31,12 @@ import {AiExecutionPanel} from '../ai/execution-panel';
 import {useExecutions} from '../ai/execution-feed';
 import {QuickCommandPanel} from '../quick-commands/quick-commands';
 import {useQuickCommandDraft} from '../quick-commands/command-draft';
+import {useRemoteEditor} from '../editor/use-remote-editor';
+import {isDirty} from '../editor/types';
 import type {ConnectionLog} from './workspace-tools';
+
+const RemoteEditorPane = lazy(() => import('../editor/remote-editor-pane').then(module => ({default: module.RemoteEditorPane})));
+const EditorDialogs = lazy(() => import('../editor/editor-dialogs').then(module => ({default: module.EditorDialogs})));
 
 function HostKeyPrompt({session}: {session: ShellSession}) {
   const {trustHost} = useSessions();
@@ -73,7 +80,7 @@ export default function Workbench() {
   const location = useLocation();
   const [params, setParams] = useSearchParams();
   const query = useConnections();
-  const {sessions, activeId, setActiveId, getRuntime, close, pendingProfile, dismissPending, launchError, clearLaunchError} = useSessions();
+  const {sessions, activeId, getRuntime, close, pendingProfile, dismissPending, launchError, clearLaunchError} = useSessions();
   const {transfers, clearCompleted} = useTransfers();
   const {fontSize, setFontSize, showServers, setShowServers, showFiles, setShowFiles} = usePreferences();
   const theme = useThemePreference();
@@ -88,6 +95,7 @@ export default function Workbench() {
   const knownTransfers = useRef(new Set<string>());
   const knownExecutions = useRef(new Set<string>());
   const executions = useExecutions();
+  const editor = useRemoteEditor();
   const {stage: stageCommand} = useQuickCommandDraft();
   const active = sessions.find(session => session.id === activeId) ?? null;
   const pendingHost = sessions.find(session => session.hostKey);
@@ -96,6 +104,7 @@ export default function Workbench() {
   const mcp = useQuery<{enabled: boolean; url: string | null; tools: string[]}>({
     queryKey: ['mcp-status'], queryFn: () => desktopCommand('mcp_status'), enabled: isDesktop, retry: false,
   });
+  const desktop = useQuery<DesktopStatus>({queryKey: desktopStatusKey, queryFn: () => desktopCommand('desktop_status'), enabled: isDesktop, retry: false});
   const openSearch = useCallback(() => { setSearchOpen(true); setSearchRequest(value => value + 1); }, []);
   const closeSearch = useCallback(() => setSearchOpen(false), []);
   const openTool = (tab: ToolTab) => { setToolTab(tab); setToolsOpen(true); };
@@ -133,7 +142,7 @@ export default function Workbench() {
   };
   const openProfile = (profile: ConnectionProfile) => {
     const existing = sessions.find(session => session.profile.id === profile.id && session.status !== 'closed' && session.status !== 'error');
-    if (existing) setActiveId(existing.id); else void navigate(`/connections/${profile.id}/connect`);
+    if (existing) editor.showTerminal(existing.id); else void navigate(`/connections/${profile.id}/connect`);
   };
 
   useEffect(() => {
@@ -162,27 +171,35 @@ export default function Workbench() {
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest('[role="menu"]')) return;
       const consume = () => { event.preventDefault(); event.stopPropagation(); };
+      if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.code === 'KeyS') {
+        consume(); if (editor.activeId && !target?.closest('dialog, [role="dialog"], [role="alertdialog"]')) void editor.save(editor.activeId); return;
+      }
+      if (target?.closest('dialog, [role="dialog"], [role="alertdialog"]')) return;
       if (event.key === 'Escape' && searchOpen && activeId) { consume(); closeSearch(); return; }
       if (!event.ctrlKey || event.altKey || event.metaKey) return;
       if (event.shiftKey && event.code === 'KeyT') { consume(); void navigate('/connections/new'); return; }
-      if (event.shiftKey && event.code === 'KeyW' && activeId) { consume(); close(activeId); return; }
+      if (event.shiftKey && event.code === 'KeyW') {
+        if (editor.activeId) { consume(); editor.requestClose(editor.activeId); return; }
+        if (activeId) { consume(); close(activeId); return; }
+      }
       if (target?.closest('input, textarea, [contenteditable="true"]') && !target.closest('.terminal-pane')) return;
       if (event.code === 'KeyJ') { consume(); setToolsOpen(value => !value); return; }
       if (event.code === 'KeyB') { consume(); setShowServers(!showServers); return; }
       if (!activeId) return;
-      if (event.code === 'KeyF') { consume(); openSearch(); return; }
+      if (event.code === 'KeyF') { consume(); if (editor.activeId) editor.find(); else openSearch(); return; }
+      if (editor.activeId) return;
       if (event.code === 'Equal' || event.code === 'NumpadAdd') { consume(); setFontSize(value => value + 1); }
       else if (event.code === 'Minus' || event.code === 'NumpadSubtract') { consume(); setFontSize(value => value - 1); }
       else if (event.code === 'Digit0' || event.code === 'Numpad0') { consume(); setFontSize(17); }
     };
     window.addEventListener('keydown', keyboard, true);
     return () => window.removeEventListener('keydown', keyboard, true);
-  }, [navigate, location.pathname, activeId, pendingHost, pendingProfile, close, openSearch, closeSearch, searchOpen, setFontSize, setShowServers, showServers]);
+  }, [navigate, location.pathname, activeId, pendingHost, pendingProfile, close, openSearch, closeSearch, searchOpen, setFontSize, setShowServers, showServers, editor.activeId, editor.save, editor.requestClose, editor.find]);
 
   function windowAction(action: 'minimize' | 'maximize' | 'close') {
     if (!isDesktop) return;
     const current = getCurrentWindow();
-    void (action === 'minimize' ? current.minimize() : action === 'maximize' ? current.toggleMaximize() : current.close()).catch(error => setNotice(errorMessage(error)));
+    void (action === 'minimize' ? current.minimize() : action === 'maximize' ? current.toggleMaximize() : desktopCommand('desktop_close_window')).catch(error => setNotice(errorMessage(error)));
   }
   const menus: IdeMenu[] = [
     {label: '文件', items: [
@@ -190,22 +207,26 @@ export default function Workbench() {
       {label: '管理连接', onClick: () => { void navigate('/connections'); }},
       {label: '打开会话链接', onClick: () => { void navigate('/settings?section=bastion'); }},
       {type: 'divider'},
+      {label: '保存远程文件', endContent: <Text className="menu-shortcut">Ctrl + S</Text>, isDisabled: !editor.active || !isDirty(editor.active) || editor.active.saving || active?.status !== 'connected', onClick: () => { if (editor.active) void editor.save(editor.active.id); }},
+      {label: '关闭文件标签', isDisabled: !editor.active || editor.active.saving, onClick: () => { if (editor.active) editor.requestClose(editor.active.id); }},
+      {type: 'divider'},
       {label: '设置', onClick: () => { void navigate('/settings'); }},
-      {label: '退出', onClick: () => windowAction('close')},
+      {label: '后台运行', isDisabled: !isDesktop || !desktop.data?.trayAvailable, onClick: () => { void desktopCommand('desktop_hide_window').catch(failure => setNotice(errorMessage(failure))); }},
+      {label: '退出 OrbitShell', isDisabled: !isDesktop, onClick: () => { void desktopCommand('desktop_request_exit').catch(failure => setNotice(errorMessage(failure))); }},
     ]},
     {label: '编辑', items: [
-      {label: '复制终端选区', endContent: <Text className="menu-shortcut">Ctrl + C</Text>, isDisabled: !active, onClick: () => {
+      {label: '复制终端选区', endContent: <Text className="menu-shortcut">Ctrl + C</Text>, isDisabled: !active || Boolean(editor.active), onClick: () => {
         const text = active ? getRuntime(active.id)?.terminal?.getSelection() : '';
         if (text) void navigator.clipboard.writeText(text).catch(error => setNotice(errorMessage(error)));
       }},
-      {label: '粘贴到终端', endContent: <Text className="menu-shortcut">Ctrl + V</Text>, isDisabled: active?.status !== 'connected', onClick: () => {
+      {label: '粘贴到终端', endContent: <Text className="menu-shortcut">Ctrl + V</Text>, isDisabled: active?.status !== 'connected' || Boolean(editor.active), onClick: () => {
         void navigator.clipboard.readText().then(text => {
           if (active) getRuntime(active.id)?.terminal?.paste(text);
         }).catch(error => setNotice(errorMessage(error)));
       }},
-      {label: '查找终端内容', endContent: <Text className="menu-shortcut">Ctrl + F</Text>, isDisabled: !active, onClick: openSearch},
+      {label: editor.active ? '查找文件内容' : '查找终端内容', endContent: <Text className="menu-shortcut">Ctrl + F</Text>, isDisabled: !active && !editor.active, onClick: editor.active ? editor.find : openSearch},
       {label: '快捷指令管理', onClick: () => { void navigate('/commands'); }},
-      {label: '清空终端显示', isDisabled: !active, onClick: () => { if (active) getRuntime(active.id)?.terminal?.clear(); }},
+      {label: '清空终端显示', isDisabled: !active || Boolean(editor.active), onClick: () => { if (active) getRuntime(active.id)?.terminal?.clear(); }},
     ]},
     {label: '视图', items: [
       {label: showServers ? '收起连接列表' : '显示连接列表', endContent: <Text className="menu-shortcut">Ctrl + B</Text>, onClick: () => setShowServers(!showServers)},
@@ -221,7 +242,7 @@ export default function Workbench() {
     {label: '会话', items: [
       {label: '打开会话', onClick: () => { void navigate('/connections'); }},
       {label: '重新连接', isDisabled: !active || active.status === 'connecting' || active.status === 'hostKey', onClick: reconnect},
-      {label: '关闭当前会话', endContent: <Text className="menu-shortcut">Ctrl + Shift + W</Text>, isDisabled: !active, onClick: () => { if (active) close(active.id); }},
+      {label: '关闭当前标签', endContent: <Text className="menu-shortcut">Ctrl + Shift + W</Text>, isDisabled: !active && !editor.active, onClick: () => { if (editor.active) editor.requestClose(editor.active.id); else if (active) close(active.id); }},
       {label: '断开连接', isDisabled: active?.status !== 'connected', onClick: () => {
         if (active) disconnectSession(active.id);
       }},
@@ -232,7 +253,7 @@ export default function Workbench() {
     ]},
   ];
   const ai = <AiExecutionPanel activeId={activeId} availableSessionIds={sessions.map(session => session.id)} onLocateSession={id => {
-    setActiveId(id); setSearchOpen(false);
+    editor.showTerminal(id); setSearchOpen(false);
     requestAnimationFrame(() => getRuntime(id)?.terminal?.focus());
   }} mcpEnabled={Boolean(mcp.data?.enabled)} mcpPending={isDesktop && mcp.isPending} mcpError={mcp.error ? errorMessage(mcp.error) : ''}
     mcpTools={mcp.data?.tools ?? []} onRefreshMcp={() => { void mcp.refetch(); }} />;
@@ -245,29 +266,37 @@ export default function Workbench() {
         const next = new URLSearchParams(params); if (value) next.set('q', value); else next.delete('q'); void setParams(next, {replace: true});
       }} onOpen={openProfile} onCreate={() => { void navigate('/connections/new'); }} onManage={() => { void navigate('/connections'); }} pending={query.isPending}
         {...(query.error ? {error: errorMessage(query.error)} : {})} onRetry={() => { void query.refetch(); }} />}
-      files={<FilePanel session={active} onCollapse={() => setShowFiles(false)} />}
+      files={<FilePanel session={active} onCollapse={() => setShowFiles(false)} onEdit={(session, entry) => { void editor.open(session, entry); }} />}
       footer={<IdeStatusbar active={active} mcpEnabled={Boolean(mcp.data?.enabled)} />}
       showServers={showServers} showFiles={showFiles} serverWidth={startPanel.size} filesWidth={endPanel.size} serverResize={startPanel.props} filesResize={endPanel.props}>
       <VStack className="workspace-stack" height="100%" gap={0}>
-        <HStack className="session-tabs" gap={0} vAlign="center"><StackItem className="session-strip-container" size="fill"><SessionTabs sessions={sessions} activeId={activeId} onSelect={setActiveId} onClose={close} onReconnect={reconnectSession} onDisconnect={disconnectSession} onCreate={() => { void navigate('/connections'); }} /></StackItem></HStack>
+        <HStack className="session-tabs" gap={0} vAlign="center"><StackItem className="session-strip-container" size="fill"><SessionTabs sessions={sessions} activeId={activeId} onSelect={editor.showTerminal} onClose={close} onReconnect={reconnectSession} onDisconnect={disconnectSession} onCreate={() => { void navigate('/connections'); }}
+          editors={editor.tabs} activeEditorId={editor.activeId} onSelectEditor={editor.activate} onCloseEditor={editor.requestClose} onSaveEditor={id => { void editor.save(id); }} onEditorHistory={editor.history} /></StackItem></HStack>
+        {editor.opening > 0 && <Banner className="compact-feedback" status="info" title="正在打开远程文件…" />}
+        {editor.error && <Banner className="compact-feedback" status="error" title="远程文件操作未完成" description={editor.error} isDismissable onDismiss={editor.clearError} />}
+        {desktop.data?.error && <Banner className="compact-feedback" status="warning" title="系统托盘不可用" description={desktop.data.error} />}
         {notice && <Banner status="info" title={notice} isDismissable onDismiss={() => setNotice('')} />}
         {launchError && <Banner status="error" title="无法打开外部会话" description={launchError} isDismissable onDismiss={clearLaunchError} />}
         {pendingProfile && location.pathname !== '/' && <Banner status="info" title="有连接正在等待登录" endContent={<Button label="前往登录" href="/" size="sm" />} />}
-        {active && <SessionContextBar session={active} onSearch={openSearch} onReconnect={reconnect} onFiles={() => setShowFiles(!showFiles)} />}
+        {active && !editor.active && <SessionContextBar session={active} onSearch={openSearch} onReconnect={reconnect} onFiles={() => setShowFiles(!showFiles)} />}
         <StackItem size="fill" className="terminal-area">
-          {!sessions.length && <Welcome />}
-          {sessions.map(session => { const runtime = getRuntime(session.id); return runtime ? <TerminalPane key={session.id} session={session} runtime={runtime} active={session.id === activeId} fontSize={fontSize}
+          {!sessions.length && !editor.documents.length && <Welcome />}
+          {sessions.map(session => { const runtime = getRuntime(session.id); return runtime ? <TerminalPane key={session.id} session={session} runtime={runtime} active={!editor.active && session.id === activeId} fontSize={fontSize}
             searchOpen={searchOpen} searchRequest={session.id === activeId ? searchRequest : 0} onCloseSearch={closeSearch} onOpenSearch={openSearch} onSaveSelection={saveSelection} /> : null; })}
+          {editor.documents.map(file => <Suspense key={file.id} fallback={file.id === editor.activeId ? <Text className="panel-message">正在准备编辑器…</Text> : null}>
+            <RemoteEditorPane file={file} active={file.id === editor.activeId} connected={sessions.some(session => session.id === file.sessionId && session.status === 'connected')} controller={editor} />
+          </Suspense>)}
         </StackItem>
         {active?.credentialWarning && <Banner className="compact-feedback" status="warning" title="连接已建立，但凭据未保存" description={active.credentialWarning} isDismissable onDismiss={() => getRuntime(active.id)?.receive({type: 'credentialWarning', message: ''})} />}
         {active?.status === 'connecting' && <Banner className="compact-feedback" status="info" title="正在连接服务器…" />}
         {active?.status === 'closed' && <Banner className="compact-feedback" status="info" title="连接已断开" endContent={<Button label="重新连接" size="sm" onClick={reconnect} />} />}
         {active?.status === 'error' && <Banner className="compact-feedback" status="error" title="连接失败" description={active.message}
           endContent={<Button label="重新连接" size="sm" onClick={reconnect} />} />}
-        <WorkspaceTools transfers={transfers} logs={logs} tab={toolTab} open={toolsOpen} onTab={openTool} onToggle={() => setToolsOpen(!toolsOpen)} onClear={clearCompleted} ai={ai} commands={<QuickCommandPanel />} />
+        <WorkspaceTools transfers={transfers} logs={logs} tab={toolTab} open={toolsOpen} onTab={openTool} onToggle={() => setToolsOpen(!toolsOpen)} onClear={clearCompleted} ai={ai} commands={<QuickCommandPanel onLocateTerminal={editor.showTerminal} />} />
       </VStack>
     </IdeLayout>
     <Outlet />
+    {editor.documents.length > 0 && <Suspense fallback={null}><EditorDialogs controller={editor} /></Suspense>}
     {pendingHost && <HostKeyPrompt key={pendingHost.id} session={pendingHost} />}
     {!pendingHost && pendingProfile && location.pathname === '/' && <CredentialsDialog key={pendingProfile.profile.id} profile={pendingProfile.profile} ephemeral={pendingProfile.ephemeral} onClose={dismissPending} />}
     {about && <Dialog isOpen className="orbit-dialog about-dialog" width="calc(var(--orbit-unit) * 36)" padding={0} onOpenChange={setAbout}>

@@ -9,11 +9,12 @@ import {Banner} from '@astryxdesign/core/Banner';
 import {List, ListItem} from '@astryxdesign/core/List';
 import {ContextMenu} from '@astryxdesign/core/ContextMenu';
 import type {ContextMenuOption} from '@astryxdesign/core/ContextMenu';
-import {ArrowUp, RefreshCw, Eye, EyeOff, Upload, Download, MoreHorizontal, Folder, FolderOpen, Copy, PanelRightClose} from 'lucide-react';
+import {ArrowLeft, RefreshCw, Eye, EyeOff, Upload, Download, MoreHorizontal, Folder, FolderOpen, Copy, PanelRightClose, FilePenLine} from 'lucide-react';
 import {formatBytes} from './file-utils';
 import type {RemoteEntry} from './file-utils';
 import {RemoteFileIcon} from './remote-file-icon';
 import {openContextMenuFromKeyboard, useCopyText} from '../../shared/context-menu';
+import {canEditFile} from '../editor/file-types';
 
 interface Props {
   connected: boolean; entries: RemoteEntry[]; path: string; selectedPath: string | null;
@@ -23,9 +24,11 @@ interface Props {
   onPath: (value: string) => void; onNavigate: (path: string) => void; onRefresh: () => void;
   onHidden: () => void; onDensity: () => void; onUpload: (directory?: string) => void; onDownload: (entry?: RemoteEntry) => void;
   onSelect: (entry: RemoteEntry) => void; onCollapse: () => void;
+  onEdit?: (entry: RemoteEntry) => void;
 }
 export function FileBrowserView(props: Props) {
   const entries = props.showHidden ? props.entries : props.entries.filter(entry => !entry.name.startsWith('.'));
+  const isDirectoryEmpty = props.connected && !props.loading && !props.error && entries.length === 0;
   const selected = entries.find(entry => entry.path === props.selectedPath);
   const copy = useCopyText();
   const [context, setContext] = useState<{props: Props; entry: RemoteEntry | null} | null>(null);
@@ -37,14 +40,17 @@ export function FileBrowserView(props: Props) {
     ...(entry.isDirectory ? [
       {label: '打开目录', icon: <FolderOpen />, isDisabled: unavailable, onClick: () => snapshot.onNavigate(entry.path)},
       {label: '上传到此目录', icon: <Upload />, isDisabled: unavailable, onClick: () => snapshot.onUpload(entry.path)},
-    ] : [{label: '下载文件', icon: <Download />, isDisabled: unavailable, onClick: () => snapshot.onDownload(entry)}]),
+    ] : [
+      ...(snapshot.onEdit && canEditFile(entry) ? [{label: '编辑文件', icon: <FilePenLine />, isDisabled: unavailable, onClick: () => snapshot.onEdit?.(entry)}] : []),
+      {label: '下载文件', icon: <Download />, isDisabled: unavailable, onClick: () => snapshot.onDownload(entry)},
+    ]),
     {type: 'divider'},
     {label: '复制名称', icon: <Copy />, onClick: () => { void copy(entry.name); }},
     {label: entry.isDirectory ? '复制目录路径' : '复制完整路径', icon: <Copy />, onClick: () => { void copy(entry.path); }},
   ] : [
     {label: '上传文件', icon: <Upload />, isDisabled: unavailable, onClick: () => snapshot.onUpload(directory)},
     {label: '刷新目录', icon: <RefreshCw />, isDisabled: unavailable, onClick: snapshot.onRefresh},
-    {label: '返回上级目录', icon: <ArrowUp />, isDisabled: unavailable, onClick: () => snapshot.onNavigate(`${directory}/..`)},
+    {label: '返回上级目录', icon: <ArrowLeft />, isDisabled: unavailable, onClick: () => snapshot.onNavigate(`${directory}/..`)},
     {type: 'divider'},
     {label: snapshot.showHidden ? '隐藏点号文件' : '显示隐藏文件', icon: snapshot.showHidden ? <EyeOff /> : <Eye />, onClick: snapshot.onHidden},
     {label: '复制目录路径', icon: <Copy />, isDisabled: !snapshot.connected, onClick: () => { void copy(directory); }},
@@ -58,7 +64,7 @@ export function FileBrowserView(props: Props) {
         value={props.path} isDisabled={Boolean(props.preparing)} onChange={props.onPath} onEnter={() => props.onNavigate(props.path)} />
       <HStack className="file-toolbar" hAlign="between" gap={1} vAlign="center" role="group" aria-label="文件操作">
         <HStack className="file-toolbar-group" gap={1}>
-          <IconButton className="file-action" size="sm" label="上级目录" tooltip="上级目录" icon={<ArrowUp />} variant="ghost" isDisabled={Boolean(props.preparing)} onClick={() => props.onNavigate(`${props.directoryPath ?? props.path}/..`)} />
+          <IconButton className="file-action" size="sm" label="上级目录" tooltip="上级目录" icon={<ArrowLeft />} variant="ghost" isDisabled={Boolean(props.preparing)} onClick={() => props.onNavigate(`${props.directoryPath ?? props.path}/..`)} />
           <IconButton className="file-action" size="sm" label="刷新目录" tooltip="刷新目录" icon={<RefreshCw />} variant="ghost" isDisabled={Boolean(props.preparing)} isLoading={Boolean(props.fetching)} onClick={props.onRefresh} />
           <IconButton className="file-action" size="sm" label={props.showHidden ? '隐藏点号文件' : '显示隐藏文件'} tooltip={props.showHidden ? '隐藏点号文件' : '显示隐藏文件'} aria-pressed={props.showHidden} data-active={String(props.showHidden)}
             icon={props.showHidden ? <Eye /> : <EyeOff />} variant="ghost" onClick={props.onHidden} />
@@ -74,7 +80,7 @@ export function FileBrowserView(props: Props) {
       </HStack>
     </VStack>}
     <StackItem size="fill" isScrollable className="file-browser" aria-label="远程文件列表">
-    <ContextMenu key={props.contextKey ?? 'files'} data-orbit-context="files" className="orbit-context-menu" label={entry?.name ?? '远程文件'} size="sm" menuWidth="calc(var(--orbit-unit) * 18)" items={menu}
+    <ContextMenu key={props.contextKey ?? 'files'} data-orbit-context="files" data-directory-empty={String(isDirectoryEmpty)} className="orbit-context-menu" label={entry?.name ?? '远程文件'} size="sm" menuWidth="calc(var(--orbit-unit) * 18)" items={menu}
       onKeyDownCapture={openContextMenuFromKeyboard}
       onContextMenuCapture={event => {
         const row = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-remote-path]') : null;
@@ -89,7 +95,7 @@ export function FileBrowserView(props: Props) {
         <VStack padding={3} gap={2}><Banner className="compact-feedback" status="error" title="无法读取目录" description={props.error}
           endContent={<Button label="重试" size="sm" onClick={props.onRefresh} />} /></VStack> : <>
           <HStack className="file-columns" hAlign="between" vAlign="center"><Text>名称</Text><Text>大小</Text></HStack>
-          <List className={props.compact ? 'file-list compact' : 'file-list'} density="compact" edge="flush">
+          {entries.length > 0 ? <List className={props.compact ? 'file-list compact' : 'file-list'} density="compact" edge="flush">
             {entries.map(entry => <ListItem key={entry.path} className="file-row" data-remote-path={entry.path} data-active={String(selected?.path === entry.path)} isSelected={selected?.path === entry.path}
               label={<Text className="file-name" maxLines={1}>{entry.name}</Text>}
               startContent={<RemoteFileIcon entry={entry} />}
@@ -98,8 +104,9 @@ export function FileBrowserView(props: Props) {
               onKeyDown={event => {
                 if (!event.nativeEvent.isComposing && (event.key === 'Enter' || event.key === 'ArrowRight') && entry.isDirectory) { event.preventDefault(); props.onNavigate(entry.path); }
               }} />)}
-          </List>
-          {!entries.length && <Text className="panel-message" color="secondary">{props.entries.length ? '仅有隐藏文件，可点击眼睛图标显示。' : '这个目录是空的。'}</Text>}
+          </List> : <VStack className="file-directory-empty" padding={3} hAlign="center" vAlign="center">
+            <Text className="file-empty-message" color="secondary" justify="center">{props.entries.length ? '仅有隐藏文件，可点击眼睛图标显示。' : '这个目录是空的。'}</Text>
+          </VStack>}
         </>}
     </ContextMenu>
     </StackItem>

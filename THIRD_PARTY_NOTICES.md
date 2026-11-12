@@ -26,6 +26,16 @@ THE SOFTWARE.
 
 Other dependencies remain subject to their individual package licenses. This notice does not assign a license to OrbitShell's original code.
 
+## CodeMirror and Lezer
+
+The remote text editor and side-by-side version comparison use locally bundled CodeMirror 6 packages and Lezer syntax highlighting. These packages are licensed under the MIT License above.
+
+Copyright (C) 2018-2021 by Marijn Haverbeke <marijn@haverbeke.berlin> and others (CodeMirror)
+
+Copyright (C) 2018-2022 by Marijn Haverbeke <marijn@haverbeke.berlin> and others (CodeMirror merge)
+
+Copyright (C) 2018 by Marijn Haverbeke <marijn@haverbeke.berlin> and others (Lezer highlight)
+
 ## Material Icon Theme
 
 The remote file browser includes a curated subset of SVG icons and file/folder associations from Material Icon Theme 5.40.0.

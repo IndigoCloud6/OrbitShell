@@ -53,6 +53,8 @@ pub struct Store {
     pub quick_commands: Vec<crate::quick_commands::QuickCommand>,
     #[serde(default)]
     pub quick_command_groups: Vec<String>,
+    #[serde(default)]
+    pub desktop: crate::desktop::DesktopPreferences,
 }
 
 pub struct Storage {

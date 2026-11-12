@@ -5,6 +5,8 @@ mod launch;
 mod mcp;
 mod executions;
 mod quick_commands;
+mod remote_editor;
+mod desktop;
 
 use anyhow::{anyhow, Context};
 use russh_sftp::protocol::OpenFlags;
@@ -23,6 +25,8 @@ pub struct AppState {
     mcp_enabled: AtomicBool,
     mcp_runtime: tokio::sync::Mutex<Option<mcp::RunningMcp>>,
     executions: executions::ExecutionStore,
+    editor: remote_editor::EditorStore,
+    desktop: desktop::DesktopState,
 }
 
 impl AppState {
@@ -296,17 +300,24 @@ pub fn run() {
             launch::ingest_arguments(app, arguments);
         }))
         .plugin(tauri_plugin_deep_link::init())
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main" && matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                desktop::renderer_loading(webview.app_handle());
+            }
+        })
         .setup(|app| {
             let storage = Storage::open(app.path().app_data_dir()?)?;
-            {
+            let close_to_tray = {
                 let mut store = storage.store.lock().map_err(|_| anyhow!("配置暂不可用"))?;
                 if store.mcp_token.is_empty() {
                     store.mcp_token = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
                     storage.persist(&store)?;
                 }
-            }
+                store.desktop.close_to_tray
+            };
             app.manage(AppState { storage, sessions: Mutex::new(HashMap::new()), launches: Mutex::new(Vec::new()),
-                mcp_enabled: AtomicBool::new(false), mcp_runtime: tokio::sync::Mutex::new(None), executions: executions::ExecutionStore::default() });
+                mcp_enabled: AtomicBool::new(false), mcp_runtime: tokio::sync::Mutex::new(None), executions: executions::ExecutionStore::default(), editor: remote_editor::EditorStore::default(), desktop: desktop::DesktopState::new(close_to_tray) });
+            desktop::install(app.handle());
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             launch::ingest_arguments(app.handle(), std::env::args().skip(1).collect());
             #[cfg(target_os = "macos")]
@@ -327,21 +338,27 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed) {
-                let state = window.state::<AppState>();
-                state.mcp_enabled.store(false, std::sync::atomic::Ordering::Release);
-                if let Ok(sessions) = state.sessions.lock() {
-                    for session in sessions.values() { session.cancel.cancel(); }
-                }
-                if let Ok(mut runtime) = state.mcp_runtime.try_lock() {
-                    if let Some(server) = runtime.take() { server.stop(); }
-                };
+            if window.label() != "main" { return; }
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    if !window.state::<AppState>().desktop.exiting.load(std::sync::atomic::Ordering::Acquire) {
+                        api.prevent_close();
+                        let _ = desktop::close_main(window.app_handle());
+                    }
+                },
+                tauri::WindowEvent::Destroyed => desktop::shutdown(window.app_handle()),
+                _ => {},
             }
         })
         .invoke_handler(tauri::generate_handler![list_connections, save_connection, delete_connection, pick_private_key,
             credential_status, save_connection_credential, forget_connection_credential,
             ssh_connect, ssh_write, ssh_resize, ssh_acknowledge, ssh_trust_host, ssh_disconnect,
             sftp_list, sftp_download, sftp_upload, mcp::mcp_status, mcp::mcp_set_enabled,
+            remote_editor::editor_open, remote_editor::editor_read, remote_editor::editor_save, remote_editor::editor_close,
+            remote_editor::editor_snapshots, remote_editor::editor_snapshot_read,
+            desktop::desktop_status, desktop::desktop_set_close_to_tray, desktop::desktop_close_window, desktop::desktop_hide_window,
+            desktop::desktop_request_exit, desktop::desktop_confirm_exit, desktop::desktop_cancel_exit,
+            desktop::desktop_register_exit_guard, desktop::desktop_unregister_exit_guard,
             executions::execution_list, executions::execution_output, executions::execution_clear,
             quick_commands::list_quick_commands, quick_commands::save_quick_command, quick_commands::delete_quick_command,
             quick_commands::save_quick_command_group, quick_commands::delete_quick_command_group,

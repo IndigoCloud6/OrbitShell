@@ -1,6 +1,6 @@
 import {useState} from 'react';
 import {useNavigate, useSearchParams} from 'react-router';
-import {useQuery} from '@tanstack/react-query';
+import {useQuery, useQueryClient} from '@tanstack/react-query';
 import {Dialog, DialogHeader} from '@astryxdesign/core/Dialog';
 import {VStack, HStack, StackItem} from '@astryxdesign/core/Stack';
 import {Text} from '@astryxdesign/core/Text';
@@ -14,6 +14,8 @@ import {Moon, Sun, Monitor, Palette, Network, ShieldCheck, Copy, Link2} from 'lu
 import {usePreferences} from '../app/preferences';
 import {useThemePreference} from '../app/theme';
 import {desktopCommand, errorMessage, isDesktop} from '../shared/desktop';
+import {desktopStatusKey} from '../shared/desktop-lifecycle';
+import type {DesktopStatus} from '../shared/desktop-lifecycle';
 import {McpToolList} from '../features/workbench/mcp-tool-list';
 
 interface McpStatus {enabled: boolean; url: string | null; token: string; tools: string[]}
@@ -36,10 +38,12 @@ export default function SettingsDialog() {
   const tab = params.get('section') === 'bastion' ? 'bastion' : params.get('section') === 'mcp' ? 'mcp' : 'appearance';
   const theme = useThemePreference();
   const preferences = usePreferences();
+  const cache = useQueryClient();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState('');
   const mcp = useQuery({queryKey: ['mcp-status'], queryFn: () => desktopCommand<McpStatus>('mcp_status'), enabled: isDesktop, retry: false});
+  const desktop = useQuery<DesktopStatus>({queryKey: desktopStatusKey, queryFn: () => desktopCommand('desktop_status'), enabled: isDesktop, retry: false});
   const [link, setLink] = useState('');
   const [usernameMode, setUsernameMode] = useState('preserve');
 
@@ -62,6 +66,16 @@ export default function SettingsDialog() {
     try {
       await desktopCommand('open_external_link', {url: link, usernameMode});
       setLink(''); void navigate('/');
+    } catch (failure) { setError(errorMessage(failure)); }
+    finally { setBusy(false); }
+  }
+  async function setCloseBehavior(value: string) {
+    if (busy) return;
+    setBusy(true); setError(''); setFeedback('');
+    try {
+      const status = await desktopCommand<DesktopStatus>('desktop_set_close_to_tray', {enabled: value === 'tray'});
+      cache.setQueryData(desktopStatusKey, status);
+      setFeedback('窗口关闭行为已保存');
     } catch (failure) { setError(errorMessage(failure)); }
     finally { setBusy(false); }
   }
@@ -107,6 +121,24 @@ export default function SettingsDialog() {
                     <Text className="settings-terminal-preview" style={{fontSize: preferences.fontSize}}>Aa Bb 0123456789 · 终端文字预览</Text>
                   </VStack>
                 </HStack>
+              </VStack>
+              <VStack className="settings-section" gap={3}>
+                <Text className="settings-section-title">窗口与后台运行</Text>
+                {!isDesktop ? <Text color="secondary">系统托盘与后台运行功能在桌面端可用。</Text> : <>
+                  {desktop.error && <Banner status="error" title="无法读取窗口设置" description={errorMessage(desktop.error)} endContent={<Button label="重试" size="sm" onClick={() => { void desktop.refetch(); }} />} />}
+                  {desktop.data?.error && <Banner status="warning" title="系统托盘不可用" description={desktop.data.error} />}
+                  <HStack className="settings-row" gap={4} vAlign="start">
+                    <Text className="settings-label">关闭窗口时</Text>
+                    <VStack className="settings-row-content" gap={2}>
+                      <Selector label="关闭主窗口时" isLabelHidden width="100%" value={desktop.data?.trayAvailable && desktop.data.closeToTray ? 'tray' : 'exit'}
+                        options={[{value: 'tray', label: '后台运行（隐藏到系统托盘）'}, {value: 'exit', label: '退出应用'}]}
+                        isDisabled={desktop.isPending || Boolean(desktop.error) || !desktop.data?.trayAvailable || busy} onChange={value => { void setCloseBehavior(value); }} />
+                      <Text type="supporting" color="secondary">后台运行时保留当前会话、传输任务和编辑草稿。点击系统托盘图标可唤起窗口。</Text>
+                      <Text type="supporting" color="secondary">完全退出请从托盘或“文件”菜单选择“退出 OrbitShell”，有未保存文件时会先提示处理。</Text>
+                      {feedback && <Text type="supporting" color="accent" role="status">{feedback}</Text>}
+                    </VStack>
+                  </HStack>
+                </>}
               </VStack>
               <VStack className="settings-section" gap={3}>
                 <Text className="settings-section-title">快捷键</Text>

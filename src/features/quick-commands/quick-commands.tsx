@@ -75,7 +75,7 @@ function CommandRows({commands, manager = false, canSend = false, busy = false, 
   return <Table className="quick-table" data={rows} columns={columns} idKey="id" density="compact" dividers="rows" textOverflow="truncate" hasHover aria-label="快捷指令列表" />;
 }
 
-export function QuickCommandPanel() {
+export function QuickCommandPanel({onLocateTerminal}: {onLocateTerminal?: (id: string) => void} = {}) {
   const query = useQuickCommands();
   const {sessions, activeId, getRuntime} = useSessions();
   const navigate = useNavigate();
@@ -101,7 +101,7 @@ export function QuickCommandPanel() {
     try {
       await runtime.sendCommand(command.command, command.appendNewline);
       setFeedback(`已发送到 ${target.profile.name}`);
-      if (activeIdRef.current === target.id) runtime.terminal?.focus();
+      if (activeIdRef.current === target.id) { onLocateTerminal?.(target.id); requestAnimationFrame(() => runtime.terminal?.focus()); }
     } catch (failure) { setError(errorMessage(failure)); }
     finally { sending.current = false; setBusy(false); }
   };

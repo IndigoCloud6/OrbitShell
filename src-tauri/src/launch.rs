@@ -90,6 +90,7 @@ pub fn enqueue(app: &AppHandle, launch: PendingLaunch) -> Result<(), String> {
     if queue.len() >= 16 { return Err("等待打开的会话过多，请先处理现有会话".into()); }
     queue.push(launch);
     drop(queue);
+    let _ = crate::desktop::show_main(app);
     app.emit_to("main", "orbitshell:launch-available", ()).map_err(|_| "无法通知工作台".into())
 }
 
@@ -106,9 +107,7 @@ pub fn ingest_arguments(app: &AppHandle, arguments: Vec<String>) {
             }
         }
     }
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show(); let _ = window.unminimize(); let _ = window.set_focus();
-    }
+    let _ = crate::desktop::show_main(app);
 }
 
 #[tauri::command]

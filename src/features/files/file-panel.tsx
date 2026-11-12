@@ -7,7 +7,7 @@ import {FileBrowserView} from './file-browser-view';
 import {useTransfers} from './transfer-provider';
 import type {Directory, RemoteEntry} from './file-utils';
 
-export function FilePanel({session, onCollapse}: {session: ShellSession | null; onCollapse: () => void}) {
+export function FilePanel({session, onCollapse, onEdit}: {session: ShellSession | null; onCollapse: () => void; onEdit?: (session: ShellSession, entry: RemoteEntry) => void}) {
   const {compactFiles, setCompactFiles, showHiddenFiles, setShowHiddenFiles} = usePreferences();
   const {run} = useTransfers();
   const queryClient = useQueryClient();
@@ -46,5 +46,5 @@ export function FilePanel({session, onCollapse}: {session: ShellSession | null; 
     {...(session?.status === 'connecting' || session?.status === 'hostKey' ? {emptyDescription: '认证完成并建立会话后，将自动加载远程文件。'} : {})}
     onPath={setDraft} onNavigate={navigate} onRefresh={() => { if (connected) void queryClient.refetchQueries({queryKey: ['remote-directory', session?.id, path], exact: true, type: 'active'}); }} onHidden={() => setShowHiddenFiles(!showHiddenFiles)}
     onDensity={() => setCompactFiles(!compactFiles)} onUpload={directory => { void transfer('upload', null, directory); }} onDownload={entry => { void transfer('download', entry); }}
-    onSelect={setSelected} onCollapse={onCollapse} />;
+    onSelect={setSelected} onCollapse={onCollapse} {...(onEdit ? {onEdit: (entry: RemoteEntry) => { if (session && connected) onEdit(session, entry); }} : {})} />;
 }
