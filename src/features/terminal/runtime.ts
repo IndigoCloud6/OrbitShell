@@ -22,6 +22,7 @@ export interface ShellSession {
   message: string;
   hostKey: HostKey | null;
   credentialWarning?: string;
+  ephemeral?: boolean;
   columns: number;
   rows: number;
 }
@@ -112,14 +113,26 @@ export class TerminalRuntime {
 
   input(data: string | Uint8Array) {
     if (!this.connected || this.disposed) return;
+    void this.queueInput(data).catch(error => this.receive({type: 'error', message: errorMessage(error)}));
+  }
+
+  async sendCommand(command: string, appendNewline: boolean) {
+    if (!this.connected || this.disposed) throw new Error('当前终端尚未连接，指令未发送');
+    const data = command.replace(/\r\n|\n/g, '\r');
+    await this.queueInput(appendNewline ? `${data.replace(/\r+$/, '')}\r` : data);
+  }
+
+  private queueInput(data: string | Uint8Array): Promise<void> {
     const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
-    // A large paste is split into ordered chunks; individual key presses preserve order as well.
-    for (let offset = 0; offset < bytes.length; offset += 32 * 1024) {
-      const chunk = Array.from(bytes.subarray(offset, offset + 32 * 1024));
-      this.inputQueue = this.inputQueue.then(async () => {
-        if (!this.disposed && this.connected) await desktopCommand('ssh_write', {sessionId: this.id, data: chunk});
-      }).catch(error => this.receive({type: 'error', message: errorMessage(error)}));
-    }
+    // Keep each paste/shortcut ordered and bound to this runtime, even after tab switches.
+    const queued = this.inputQueue.then(async () => {
+      for (let offset = 0; offset < bytes.length; offset += 32 * 1024) {
+        if (this.disposed || !this.connected) throw new Error('终端已断开，剩余输入未发送');
+        await desktopCommand('ssh_write', {sessionId: this.id, data: Array.from(bytes.subarray(offset, offset + 32 * 1024))});
+      }
+    });
+    this.inputQueue = queued.catch(() => {});
+    return queued;
   }
 
   async resize(columns: number, rows: number) {

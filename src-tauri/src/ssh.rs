@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::{sync::{Arc, Mutex}, time::Duration};
 use tauri::{ipc::Channel, AppHandle, Manager, Emitter};
 use std::{collections::VecDeque, sync::atomic::{AtomicBool, Ordering}};
-use tokio::{sync::{mpsc, oneshot, OnceCell}, time::timeout};
+use tokio::{sync::{mpsc, oneshot, OnceCell}, time::{sleep_until, timeout, timeout_at, Instant}};
 use tokio_util::sync::CancellationToken;
 use zeroize::{Zeroizing, Zeroize};
 
@@ -89,6 +89,7 @@ pub enum SessionCommand {
 
 pub struct LiveSession {
     pub profile: ConnectionProfile,
+    pub is_temporary: bool,
     pub connected: AtomicBool,
     pub output: Mutex<OutputBuffer>,
     pub commands: mpsc::Sender<SessionCommand>,
@@ -102,25 +103,58 @@ pub struct LiveSession {
 impl LiveSession {
     pub async fn sftp(&self) -> Result<Arc<SftpSession>> {
         if self.cancel.is_cancelled() { bail!("连接已关闭"); }
+        if !self.connected.load(Ordering::Acquire) { bail!("SSH 尚未连接，请等待认证完成"); }
         let connection = self.connection.get().ok_or_else(|| anyhow!("SSH 尚未连接"))?.clone();
         let value = self.sftp.get_or_try_init(|| async {
-            timeout(Duration::from_secs(20), async {
-                let channel = connection.channel_open_session().await?;
-                channel.request_subsystem(true, "sftp").await?;
-                // Wait for the server's acceptance before constructing the SFTP stream.
-                let mut channel = channel;
-                loop {
-                    match channel.wait().await {
-                        Some(ChannelMsg::Success) => break,
-                        Some(ChannelMsg::Failure | ChannelMsg::Close) | None => bail!("服务器未启用 SFTP"),
-                        _ => {}
+            // A link-launched bastion can accept the shell before its target session is ready.
+            // Only retry initial SFTP negotiation; never retry file writes or SSH authentication.
+            let deadline = Instant::now() + Duration::from_secs(if self.is_temporary { 60 } else { 20 });
+            let mut retry_delay = Duration::from_millis(500);
+            loop {
+                let attempt_deadline = deadline.min(Instant::now() + Duration::from_secs(20));
+                let result = tokio::select! {
+                    _ = self.cancel.cancelled() => bail!("连接已关闭"),
+                    result = open_sftp(&connection, attempt_deadline) => result,
+                };
+                match result {
+                    Ok(sftp) => return Ok(sftp),
+                    Err(error) => {
+                        if !self.is_temporary { return Err(error); }
+                        if Instant::now() >= deadline {
+                            return Err(error).context("等待堡垒机 SFTP 服务就绪超时，请稍后重试");
+                        }
+                        tokio::select! {
+                            _ = self.cancel.cancelled() => bail!("连接已关闭"),
+                            _ = sleep_until(deadline.min(Instant::now() + retry_delay)) => {}
+                        }
+                        if Instant::now() >= deadline {
+                            return Err(error).context("等待堡垒机 SFTP 服务就绪超时，请稍后重试");
+                        }
+                        retry_delay = (retry_delay * 2).min(Duration::from_secs(2));
                     }
                 }
-                Ok::<_, anyhow::Error>(Arc::new(SftpSession::new(channel.into_stream()).await?))
-            }).await.context("SFTP 响应超时")?
+            }
         }).await?;
         Ok(value.clone())
     }
+}
+
+async fn open_sftp(connection: &client::Handle<SshHandler>, deadline: Instant) -> Result<Arc<SftpSession>> {
+    let mut channel = timeout_at(deadline, connection.channel_open_session()).await.context("SFTP 通道建立超时")??;
+    let accepted = timeout_at(deadline, async {
+        channel.request_subsystem(true, "sftp").await?;
+        loop {
+            match channel.wait().await {
+                Some(ChannelMsg::Success) => return Ok::<_, anyhow::Error>(()),
+                Some(ChannelMsg::Failure | ChannelMsg::Close) | None => bail!("服务器尚未接受 SFTP 子系统"),
+                _ => {}
+            }
+        }
+    }).await.context("SFTP 响应超时").and_then(|result| result);
+    // ChannelStream closes its SSH channel on drop, including rejected or timed-out requests.
+    let stream = channel.into_stream();
+    accepted?;
+    Ok(Arc::new(timeout_at(deadline, SftpSession::new(stream)).await.context("SFTP 初始化超时")??))
 }
 
 pub struct SshHandler {

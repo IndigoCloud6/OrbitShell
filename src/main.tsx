@@ -10,6 +10,7 @@ import {PreferencesProvider} from './app/preferences';
 import {router} from './app/router';
 import {RouterLink} from './app/router-link';
 import {shouldRetry} from './lib/errors';
+import {AppContextMenus} from './shared/context-menu';
 import '@astryxdesign/core/reset.css';
 import '@astryxdesign/core/astryx.css';
 import '@xterm/xterm/css/xterm.css';
@@ -31,7 +32,7 @@ createRoot(root).render(
       <AppTheme>
         <LinkProvider component={RouterLink}>
           <QueryClientProvider client={queryClient}>
-            <PreferencesProvider><RouterProvider router={router} /></PreferencesProvider>
+            <PreferencesProvider><AppContextMenus><RouterProvider router={router} /></AppContextMenus></PreferencesProvider>
           </QueryClientProvider>
         </LinkProvider>
       </AppTheme>

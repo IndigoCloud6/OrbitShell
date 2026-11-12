@@ -1,23 +1,25 @@
 import {useState} from 'react';
 import type {FormEvent} from 'react';
-import {useNavigate, useParams} from 'react-router';
+import {useNavigate, useParams, useSearchParams} from 'react-router';
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query';
 import {Button} from '@astryxdesign/core/Button';
 import {IconButton} from '@astryxdesign/core/IconButton';
 import {Dialog, DialogHeader} from '@astryxdesign/core/Dialog';
-import {VStack, HStack} from '@astryxdesign/core/Stack';
+import {VStack, HStack, StackItem} from '@astryxdesign/core/Stack';
 import {Text} from '@astryxdesign/core/Text';
 import {TextInput} from '@astryxdesign/core/TextInput';
 import {CheckboxInput} from '@astryxdesign/core/CheckboxInput';
-import {Selector} from '@astryxdesign/core/Selector';
 import {Banner} from '@astryxdesign/core/Banner';
 import {List, ListItem} from '@astryxdesign/core/List';
-import {FolderOpen, Pencil, Plug, Plus, Server, Trash2} from 'lucide-react';
+import {Table, TableHeader, TableBody, TableRow, TableHeaderCell, TableCell} from '@astryxdesign/core/Table';
+import {DropdownMenu} from '@astryxdesign/core/DropdownMenu';
+import {Folder, FolderOpen, KeyRound, Layers, LoaderCircle, LockKeyhole, MoreHorizontal, Pencil, Plug, Plus, Search, Server, Trash2} from 'lucide-react';
 import {connectionKeys, deleteConnection, listConnections, saveConnection} from './service';
 import {credentialStatusKey, forgetCredential, saveCredential, useCredentialStatus} from './credentials';
 import type {ConnectionProfile} from './types';
 import {desktopCommand, errorMessage, isDesktop} from '../../shared/desktop';
 import {useSessions} from '../terminal/session-provider';
+import {usePreferences} from '../../app/preferences';
 
 export function useConnections() {
   return useQuery({queryKey: connectionKeys.all, queryFn: ({signal}) => listConnections(signal)});
@@ -29,7 +31,7 @@ export function ConnectionEditorRoute() {
   const navigate = useNavigate();
   const profile = query.data?.find(item => item.id === connectionId);
   if (connectionId && !profile) {
-    return <Dialog isOpen onOpenChange={open => { if (!open) void navigate('/'); }}>
+    return <Dialog isOpen className="orbit-dialog" onOpenChange={open => { if (!open) void navigate('/'); }}>
       <DialogHeader title="编辑连接" />
       <Text>{query.isPending ? '正在读取连接…' : query.error ? errorMessage(query.error) : '连接配置不存在'}</Text>
       <Button label="返回工作台" href="/" />
@@ -41,6 +43,7 @@ export function ConnectionEditorRoute() {
 function ConnectionEditor({profile}: {profile: ConnectionProfile | null}) {
   const navigate = useNavigate();
   const cache = useQueryClient();
+  const {uiDensity} = usePreferences();
   const {start} = useSessions();
   const [form, setForm] = useState<ConnectionProfile>(() => profile ?? {
     id: crypto.randomUUID(), name: '', group: '未分组', hostname: '', port: 22, username: 'root', authMethod: 'password', privateKeyPath: null,
@@ -97,9 +100,12 @@ function ConnectionEditor({profile}: {profile: ConnectionProfile | null}) {
     finally { setBusy(false); }
   }
 
-  return <Dialog isOpen purpose={busy ? 'required' : 'form'} width="36rem" onOpenChange={open => { if (!open && !busy) void navigate('/'); }}>
-    <DialogHeader title={profile ? '编辑连接' : '新建 SSH 连接'} subtitle="保存服务器信息，可选择记住本机登录凭据。" onOpenChange={open => { if (!open && !busy) void navigate('/'); }} />
-    <VStack gap={4} as="form" onSubmit={(event: FormEvent) => { event.preventDefault(); void submit(false); }}>
+  return <Dialog isOpen className="orbit-dialog connection-editor" data-density={uiDensity} purpose={busy ? 'required' : 'form'}
+    width="calc(var(--orbit-unit) * 54)" maxHeight="calc(100dvh - var(--orbit-unit) * 6)" padding={0}
+    onOpenChange={open => { if (!open && !busy) void navigate('/'); }}>
+    <VStack className="orbit-dialog-layout" gap={0} as="form" onSubmit={(event: FormEvent) => { event.preventDefault(); void submit(false); }}>
+      <DialogHeader className="orbit-dialog-header" title={profile ? '编辑连接' : '新建 SSH 连接'} hasDivider onOpenChange={open => { if (!open && !busy) void navigate('/'); }} />
+      <VStack className="orbit-dialog-body" gap={4}>
       {error && <Banner status="error" title="保存未完成" description={error} />}
       {feedback && <Text type="supporting" color="accent" role="status">{feedback}</Text>}
       <TextInput label="连接名称" value={form.name} onChange={value => update('name', value)} placeholder="例如 web-prod-01" isRequired hasAutoFocus isDisabled={busy} />
@@ -111,13 +117,27 @@ function ConnectionEditor({profile}: {profile: ConnectionProfile | null}) {
         <TextInput label="用户名" value={form.username} onChange={value => update('username', value)} width="100%" isRequired isDisabled={busy} />
         <TextInput label="分组" value={form.group} onChange={value => update('group', value)} placeholder="未分组" width="100%" isDisabled={busy} />
       </HStack>
-      <Selector label="认证方式" value={form.authMethod} options={[{value: 'password', label: '密码'}, {value: 'privateKey', label: 'SSH 私钥'}]}
-        onChange={value => { update('authMethod', value === 'privateKey' ? 'privateKey' : 'password'); setCredential(''); setRemember(false); }} width="100%" isDisabled={busy} />
+      <VStack gap={2}>
+        <Text className="field-label">认证方式</Text>
+        <HStack className="choice-group connection-auth-choice" role="group" aria-label="认证方式" gap={0}>
+          <Button label="密码" variant="ghost" isDisabled={busy} aria-pressed={form.authMethod === 'password'} onClick={() => {
+            if (form.authMethod === 'password') return;
+            update('authMethod', 'password'); setCredential(''); setRemember(false);
+          }} />
+          <Button label="SSH 私钥" variant="ghost" isDisabled={busy} aria-pressed={form.authMethod === 'privateKey'} onClick={() => {
+            if (form.authMethod === 'privateKey') return;
+            update('authMethod', 'privateKey'); setCredential(''); setRemember(false);
+          }} />
+        </HStack>
+      </VStack>
       {form.authMethod === 'privateKey' && <VStack gap={2}>
-        <TextInput label="私钥文件" value={form.privateKeyPath ?? ''} onChange={value => update('privateKeyPath', value || null)} placeholder="OpenSSH 或 PEM 私钥路径" isRequired isDisabled={busy} />
-        <Button label="选择私钥文件" size="sm" icon={<FolderOpen size="1em" />} isDisabled={!isDesktop || busy} onClick={() => {
-          void desktopCommand<string | null>('pick_private_key').then(path => { if (path) update('privateKeyPath', path); }).catch(failure => setError(errorMessage(failure)));
-        }} />
+        <HStack className="private-key-picker" gap={2} vAlign="end">
+          <StackItem size="fill"><TextInput label="私钥文件" value={form.privateKeyPath ?? ''} onChange={value => update('privateKeyPath', value || null)}
+            placeholder="OpenSSH 或 PEM 私钥路径" width="100%" isRequired isDisabled={busy} /></StackItem>
+          <IconButton label="选择私钥文件" tooltip="选择私钥文件" icon={<FolderOpen size="1em" />} isDisabled={!isDesktop || busy} onClick={() => {
+            void desktopCommand<string | null>('pick_private_key').then(path => { if (path) update('privateKeyPath', path); }).catch(failure => setError(errorMessage(failure)));
+          }} />
+        </HStack>
       </VStack>}
       <VStack gap={2}>
         <TextInput label={credentialLabel} type="password" value={credential} onChange={setCredential} autoComplete="new-password" isOptional isDisabled={busy}
@@ -132,7 +152,8 @@ function ConnectionEditor({profile}: {profile: ConnectionProfile | null}) {
           <Button label="清除已保存凭据" size="sm" variant="ghost" isDisabled={busy} onClick={() => { void clearSaved(); }} />
         </HStack>}
       </VStack>
-      <HStack gap={2} hAlign="end" paddingBlockStart={2} wrap="wrap">
+      </VStack>
+      <HStack className="orbit-dialog-footer" gap={2} hAlign="end" wrap="wrap">
         <Button label="取消" onClick={() => { void navigate('/'); }} isDisabled={busy} />
         <Button label="保存连接" type="submit" isLoading={busy} />
         <Button label="保存并连接" variant="primary" onClick={() => { void submit(true); }} isLoading={busy} />
@@ -146,13 +167,14 @@ export function CredentialsRoute() {
   const query = useConnections();
   const navigate = useNavigate();
   const profile = query.data?.find(item => item.id === connectionId);
-  if (!profile) return <Dialog isOpen onOpenChange={open => { if (!open) void navigate('/'); }}><DialogHeader title="打开连接" />
+  if (!profile) return <Dialog isOpen className="orbit-dialog" onOpenChange={open => { if (!open) void navigate('/'); }}><DialogHeader title="连接服务器" />
     <Text>{query.isPending ? '正在读取连接…' : query.error ? errorMessage(query.error) : '找不到这个连接'}</Text><Button label="返回" href="/" /></Dialog>;
   return <CredentialsDialog key={profile.id} profile={profile} onClose={() => { void navigate('/'); }} />;
 }
 
 export function CredentialsDialog({profile, onClose, ephemeral = false}: {profile: ConnectionProfile; onClose: () => void; ephemeral?: boolean}) {
   const cache = useQueryClient();
+  const {uiDensity} = usePreferences();
   const savedCredential = useCredentialStatus(profile.id, !ephemeral);
   const [credential, setCredential] = useState('');
   const [remember, setRemember] = useState(false);
@@ -188,30 +210,76 @@ export function CredentialsDialog({profile, onClose, ephemeral = false}: {profil
     } catch (failure) { setError(errorMessage(failure)); }
   };
 
-  return <Dialog isOpen purpose={busy ? 'required' : 'form'} width="30rem" onOpenChange={open => { if (!open && !busy) onClose(); }}>
-    <DialogHeader title={`连接 ${profile.name}`} subtitle={`${profile.hostname}:${profile.port}`} onOpenChange={open => { if (!open && !busy) onClose(); }} />
-    <VStack gap={4} as="form" onSubmit={connect}>
-      {error && <Banner status="error" title="暂时无法连接" description={error} />}
-      {!isDesktop && <Banner status="info" title="当前为浏览器预览" description="请启动 OrbitShell 桌面端连接服务器。" />}
-      {!profile.username && <TextInput label="用户名" value={username} onChange={setUsername} isRequired isDisabled={busy} />}
-      {reading && <Text type="supporting" color="secondary" role="status">正在读取已保存凭据状态…</Text>}
-      {!ephemeral && savedCredential.error && <Banner status="warning" title="无法读取已保存凭据" description="可手动输入本次密码，或清除旧凭据后重试。"
-        endContent={<Button label="重试" size="sm" isDisabled={busy} onClick={() => { void savedCredential.refetch(); }} />} />}
-      {useSaved ? <Banner status="info" title={`已保存${credentialLabel}`} description="连接时将使用本机保存的凭据，无需再次输入。" /> : <VStack gap={2}>
-        <TextInput label={credentialLabel} type="password" value={credential} onChange={setCredential}
-          autoComplete="off" hasAutoFocus isDisabled={busy} isOptional={profile.authMethod === 'privateKey'}
-          description={ephemeral ? '临时会话的认证信息仅用于本次连接。' : profile.authMethod === 'privateKey' ? '未加密的私钥可留空。' : '可选择记住密码，下次连接直接使用。'} />
-        {!ephemeral && <CheckboxInput label={`记住${credentialLabel}`} size="sm" value={remember} onChange={setRemember} isDisabled={busy || !savedCredential.data?.available}
-          description={savedCredential.data?.available ? '认证成功后安全保存在本机。' : reading ? '正在读取凭据存储状态…' : '凭据保存目前支持 Windows 桌面端。'} />}
-      </VStack>}
-      {!ephemeral && (savedCredential.data?.saved || savedCredential.error) && <HStack gap={2} wrap="wrap">
-        {savedCredential.data?.saved && <Button label={useSaved ? `更换${credentialLabel}` : '使用已保存凭据'} size="sm" variant="ghost" isDisabled={busy} onClick={() => {
+  const credentialActions = !ephemeral && (savedCredential.data?.saved || savedCredential.error) ?
+    <HStack className="connection-login-credential-actions" gap={1} vAlign="center">
+      {savedCredential.data?.saved && <Button label={useSaved ? profile.authMethod === 'privateKey' ? '更换口令' : '更换密码' : '使用已保存凭据'}
+        tooltip={useSaved ? `更换${credentialLabel}` : '使用已保存凭据'} size="sm" variant="ghost" isDisabled={busy} onClick={() => {
           if (useSaved) { setReplaceSaved(true); setRemember(true); }
           else { setCredential(''); setReplaceSaved(false); setRemember(false); }
-        }} />}
-        <Button label="清除已保存凭据" size="sm" variant="ghost" isDisabled={busy} onClick={() => { void clearSaved(); }} />
-      </HStack>}
-      <HStack gap={2} hAlign="end"><Button label="取消" onClick={onClose} isDisabled={busy} /><Button label="连接服务器" icon={<Plug size="1em" />} type="submit" variant="primary" isDisabled={!isDesktop || reading || busy} /></HStack>
+      }} />}
+      <DropdownMenu presentation="popover" hasChevron={false} alignment="end" menuWidth="max-content"
+        renderTrigger={triggerProps => <IconButton {...triggerProps} className="connection-login-more" label="更多凭据操作" tooltip="更多凭据操作"
+          icon={<MoreHorizontal size="1em" />} size="sm" variant="ghost" isDisabled={busy} />}
+        items={[{label: '清除已保存凭据', icon: <Trash2 size="1em" />, variant: 'destructive', isDisabled: busy, onClick: () => { void clearSaved(); }}]} />
+    </HStack> : null;
+
+  return <Dialog isOpen className="orbit-dialog connection-login" data-density={uiDensity} purpose={busy ? 'required' : 'form'} padding={0}
+    width="calc(var(--orbit-unit) * 54)" maxHeight="calc(100dvh - var(--orbit-unit) * 6)"
+    onOpenChange={open => { if (!open && !busy) onClose(); }}>
+    <VStack className="connection-login-layout" gap={0} as="form" onSubmit={connect}>
+      <DialogHeader className="connection-login-header" title="连接服务器" hasDivider onOpenChange={open => { if (!open && !busy) onClose(); }} />
+      <VStack className="connection-login-body" gap={0}>
+        <HStack className="connection-login-server" gap={3} vAlign="center">
+          <HStack className="connection-login-server-mark" vAlign="center"><Server aria-hidden /></HStack>
+          <VStack className="connection-login-target" gap={0.5}>
+            <Text className="connection-login-name" maxLines={1}>{profile.name}</Text>
+            <Text className="connection-login-address" color="secondary" maxLines={1}>
+              {profile.hostname.includes(':') && !profile.hostname.startsWith('[') ? `[${profile.hostname}]:${profile.port}` : `${profile.hostname}:${profile.port}`}
+            </Text>
+          </VStack>
+          <Text className="connection-login-group" color="secondary" maxLines={1}>{profile.group}</Text>
+        </HStack>
+        <HStack className="connection-login-details" gap={4} vAlign="start">
+          <VStack className="connection-login-detail" gap={1}>
+            <Text className="connection-login-label" color="secondary">用户名</Text>
+            {profile.username ? <Text className="connection-login-value" maxLines={1}>{profile.username}</Text> :
+              <TextInput label="用户名" isLabelHidden value={username} onChange={setUsername} isRequired isDisabled={busy} hasAutoFocus
+                width="100%" controlClassName="connection-login-input" />}
+          </VStack>
+          <VStack className="connection-login-detail" gap={1}>
+            <Text className="connection-login-label" color="secondary">认证方式</Text>
+            <Text className="connection-login-value">{profile.authMethod === 'privateKey' ? 'SSH 私钥' : '密码'}</Text>
+          </VStack>
+        </HStack>
+        <VStack className="connection-login-authentication" gap={3}>
+          {error && <Banner status="error" title="暂时无法连接" description={error} />}
+          {!isDesktop && <Banner status="info" title="当前为浏览器预览" description="请启动 OrbitShell 桌面端连接服务器。" />}
+          {!ephemeral && savedCredential.error && <Banner status="warning" title="无法读取已保存凭据" description="可手动输入本次密码，或清除旧凭据后重试。"
+            endContent={<Button label="重试" size="sm" isDisabled={busy} onClick={() => { void savedCredential.refetch(); }} />} />}
+          {reading ? <HStack className="connection-login-reading" gap={2} vAlign="center" role="status">
+            <LoaderCircle className="spinning" aria-hidden /><Text color="secondary">正在读取已保存凭据状态…</Text>
+          </HStack> : useSaved ? <HStack className="connection-login-credential-strip" gap={3} vAlign="center">
+            <HStack className="connection-login-credential-mark" vAlign="center"><KeyRound aria-hidden /></HStack>
+            <VStack className="connection-login-credential-copy" gap={0.5}>
+              <Text className="connection-login-credential-title">已保存{credentialLabel}</Text>
+              <Text className="connection-login-credential-description" color="secondary">连接时使用本机保存的凭据</Text>
+            </VStack>
+            {credentialActions}
+          </HStack> : <VStack className="connection-login-manual" gap={3}>
+            <TextInput label={credentialLabel} type="password" value={credential} onChange={setCredential}
+              autoComplete="off" hasAutoFocus={Boolean(profile.username)} isDisabled={busy} isOptional={profile.authMethod === 'privateKey'}
+              width="100%" controlClassName="connection-login-input"
+              description={ephemeral ? '临时会话的认证信息仅用于本次连接。' : profile.authMethod === 'privateKey' ? '未加密的私钥可留空。' : '可选择记住密码，下次连接直接使用。'} />
+            {!ephemeral && <CheckboxInput label={`记住${credentialLabel}`} size="sm" value={remember} onChange={setRemember} isDisabled={busy || !savedCredential.data?.available}
+              description={savedCredential.data?.available ? '认证成功后安全保存在本机。' : '凭据保存目前支持 Windows 桌面端。'} />}
+            {credentialActions}
+          </VStack>}
+        </VStack>
+      </VStack>
+      <HStack className="connection-login-footer" gap={2} hAlign="end">
+        <Button label="取消" onClick={onClose} isDisabled={busy} />
+        <Button label="连接服务器" icon={<Plug size="1em" />} type="submit" variant="primary" isDisabled={!isDesktop || reading || busy} />
+      </HStack>
     </VStack>
   </Dialog>;
 }
@@ -220,33 +288,136 @@ export function ConnectionManagerRoute() {
   const query = useConnections();
   const navigate = useNavigate();
   const cache = useQueryClient();
+  const {uiDensity} = usePreferences();
+  const [params, setParams] = useSearchParams();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [removing, setRemoving] = useState<ConnectionProfile | null>(null);
   const deletion = useMutation({mutationFn: deleteConnection, onSuccess: async (_result, id) => {
     await cache.invalidateQueries({queryKey: connectionKeys.all});
     cache.removeQueries({queryKey: credentialStatusKey(id)});
     setRemoving(null);
   }});
-  return <Dialog isOpen purpose={removing ? 'required' : 'info'} width="46rem" onOpenChange={open => { if (!open) void navigate('/'); }}>
-    <DialogHeader title={removing ? '删除连接配置' : '管理连接'} onOpenChange={open => { if (!open) void navigate('/'); }} />
-    <VStack gap={4}>
-      {removing ? <>
+
+  if (removing) {
+    const cancelRemoval = (open: boolean) => { if (!open && !deletion.isPending) setRemoving(null); };
+    return <Dialog isOpen className="orbit-dialog connection-removal" data-density={uiDensity} purpose="required" padding={0}
+      width="calc(var(--orbit-unit) * 44)" maxHeight="calc(100dvh - var(--orbit-unit) * 6)" onOpenChange={cancelRemoval}>
+      <VStack className="orbit-dialog-layout" gap={0}>
+        <DialogHeader className="orbit-dialog-header" title="删除连接配置" hasDivider onOpenChange={cancelRemoval} />
+        <VStack className="orbit-dialog-body" gap={4}>
         <Text>删除“{removing.name}”的本地连接配置及其已保存凭据？已经打开的会话仍可继续使用。</Text>
         {deletion.error && <Banner status="error" title="删除失败" description={errorMessage(deletion.error)} />}
-        <HStack gap={2} hAlign="end"><Button label="取消" onClick={() => setRemoving(null)} /><Button label="删除配置" variant="destructive" isLoading={deletion.isPending} onClick={() => deletion.mutate(removing.id)} /></HStack>
-      </> : <>
-        <HStack hAlign="between"><Text color="secondary">{query.data?.length ?? 0} 个已保存的连接</Text><Button label="新建连接" href="/connections/new" icon={<Plus size="1em" />} /></HStack>
-        {query.isPending && <Text>正在读取连接…</Text>}
-        {query.error && <Banner status="error" title="无法读取连接" description={errorMessage(query.error)} endContent={<Button label="重试" onClick={() => { void query.refetch(); }} />} />}
-        {query.data?.length === 0 && <Text color="secondary">还没有连接。创建第一个 SSH 连接开始使用。</Text>}
-        <List density="compact" hasDividers>
-          {query.data?.map(profile => <ListItem key={profile.id} label={profile.name} description={`${profile.group} · ${profile.hostname}:${profile.port}`} startContent={<Server size="1em" />}
-            endContent={<HStack gap={1}>
-              <IconButton label={`连接 ${profile.name}`} icon={<Plug size="1em" />} variant="ghost" href={`/connections/${profile.id}/connect`} />
-              <IconButton label={`编辑 ${profile.name}`} icon={<Pencil size="1em" />} variant="ghost" href={`/connections/${profile.id}/edit`} />
-              <IconButton label={`删除 ${profile.name}`} icon={<Trash2 size="1em" />} variant="ghost" onClick={() => { deletion.reset(); setRemoving(profile); }} />
-            </HStack>} />)}
-        </List>
-      </>}
+        </VStack>
+        <HStack className="orbit-dialog-footer" gap={2} hAlign="end">
+          <Button label="取消" isDisabled={deletion.isPending} onClick={() => setRemoving(null)} />
+          <Button label="删除配置" variant="destructive" isLoading={deletion.isPending} onClick={() => deletion.mutate(removing.id)} />
+        </HStack>
+      </VStack>
+    </Dialog>;
+  }
+
+  const profiles = query.data ?? [];
+  const groups = new Map<string, number>();
+  for (const profile of profiles) groups.set(profile.group, (groups.get(profile.group) ?? 0) + 1);
+  const requestedGroup = params.get('group');
+  const activeGroup = requestedGroup && groups.has(requestedGroup) ? requestedGroup : null;
+  const search = params.get('search') ?? '';
+  const searchTerms = search.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  const filtered = profiles.filter(profile => {
+    if (activeGroup !== null && profile.group !== activeGroup) return false;
+    const text = `${profile.name} ${profile.hostname} ${profile.port} ${profile.username}`.toLocaleLowerCase();
+    return searchTerms.every(term => text.includes(term));
+  });
+  const selected = filtered.find(profile => profile.id === selectedId) ?? filtered[0];
+  const setFilter = (name: 'search' | 'group', value: string) => {
+    const next = new URLSearchParams(params);
+    if (value) next.set(name, value); else next.delete(name);
+    void setParams(next, {replace: true});
+  };
+
+  return <Dialog isOpen className="orbit-dialog connection-manager" data-density={uiDensity} padding={0}
+    width="calc(var(--orbit-unit) * 96)" maxHeight="calc(100dvh - var(--orbit-unit) * 6)"
+    onOpenChange={open => { if (!open) void navigate('/'); }}>
+    <VStack className="connection-manager-layout" gap={0}>
+      <DialogHeader className="connection-manager-header" hasDivider
+        title={<>管理连接{query.data && <Text className="connection-manager-count" color="secondary">{profiles.length} 个连接</Text>}</>}
+        endContent={<Button className="connection-manager-create" label="新建连接" href="/connections/new" icon={<Plus size="1em" />} variant="primary" />}
+        onOpenChange={open => { if (!open) void navigate('/'); }} />
+      <HStack className="connection-manager-body" gap={0} vAlign="stretch">
+        <VStack as="nav" className="connection-manager-sidebar" gap={0} aria-label="连接分组">
+          <Text className="connection-manager-group-heading" color="secondary">连接分组</Text>
+          <StackItem size="fill" isScrollable aria-label="连接分组列表">
+            <List density="compact" edge="flush" className="connection-manager-groups">
+              <ListItem className="connection-manager-group" label="全部连接" isSelected={activeGroup === null} data-active={String(activeGroup === null)}
+                startContent={<Layers aria-hidden />} endContent={<Text className="connection-manager-group-count" hasTabularNumbers>{profiles.length}</Text>}
+                onClick={() => setFilter('group', '')} />
+              {[...groups].map(([group, count]) => <ListItem key={group} className="connection-manager-group"
+                label={<Text maxLines={1}>{group}</Text>} isSelected={activeGroup === group} data-active={String(activeGroup === group)}
+                startContent={<Folder aria-hidden />} endContent={<Text className="connection-manager-group-count" hasTabularNumbers>{count}</Text>}
+                onClick={() => setFilter('group', group)} />)}
+            </List>
+          </StackItem>
+        </VStack>
+        <VStack className="connection-manager-main" gap={0}>
+          <VStack className="connection-manager-search" gap={0}>
+            <TextInput label="搜索连接" isLabelHidden type="search" value={search} onChange={value => setFilter('search', value)}
+              placeholder="搜索名称、主机或用户名…" startIcon={<Search size="1em" />} hasClear hasSpellCheck={false}
+              autoComplete="off" width="100%" controlClassName="connection-manager-search-control" />
+          </VStack>
+          {query.error && <VStack className="connection-manager-feedback" gap={0}>
+            <Banner status="error" title="无法读取连接" description={errorMessage(query.error)}
+              endContent={<Button label="重试" size="sm" isLoading={query.isFetching} onClick={() => { void query.refetch(); }} />} />
+          </VStack>}
+          {query.isPending && <VStack className="connection-manager-empty" gap={2} vAlign="center" hAlign="center" role="status"><Text color="secondary">正在读取连接…</Text></VStack>}
+          {query.data && !filtered.length && <VStack className="connection-manager-empty" gap={3} vAlign="center" hAlign="center" role="status">
+            <Server className="connection-manager-empty-icon" aria-hidden />
+            <Text>{profiles.length ? '没有匹配的连接' : '还没有保存的连接'}</Text>
+            {profiles.length > 0 && <Button label="清除筛选" variant="ghost" size="sm" onClick={() => {
+              const next = new URLSearchParams(params);
+              next.delete('search'); next.delete('group');
+              void setParams(next, {replace: true});
+            }} />}
+          </VStack>}
+          {filtered.length > 0 && <StackItem className="connection-manager-table-region" size="fill">
+            <Table className="connection-manager-table" density="compact" dividers="rows" textOverflow="truncate" aria-label="已保存的连接">
+              <TableHeader>
+                <TableRow isHeaderRow>
+                  <TableHeaderCell className="connection-manager-name-column" scope="col">连接名称</TableHeaderCell>
+                  <TableHeaderCell className="connection-manager-host-column" scope="col">主机 / 端口</TableHeaderCell>
+                  <TableHeaderCell className="connection-manager-user-column" scope="col">用户名</TableHeaderCell>
+                  <TableHeaderCell className="connection-manager-group-column" scope="col">分组</TableHeaderCell>
+                  <TableHeaderCell className="connection-manager-auth-column" scope="col">认证</TableHeaderCell>
+                  <TableHeaderCell className="connection-manager-actions-column" scope="col">操作</TableHeaderCell>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filtered.map(profile => <TableRow key={profile.id} className="connection-manager-row" data-active={String(selected?.id === profile.id)}
+                  onClick={() => setSelectedId(profile.id)} onFocusCapture={() => setSelectedId(profile.id)}>
+                  <TableCell><HStack className="connection-manager-name" gap={2} vAlign="center">
+                    <Server aria-hidden /><Text maxLines={1}>{profile.name}</Text>
+                  </HStack></TableCell>
+                  <TableCell><Text className="connection-manager-host" maxLines={1}>
+                    {profile.hostname.includes(':') ? `[${profile.hostname}]:${profile.port}` : `${profile.hostname}:${profile.port}`}
+                  </Text></TableCell>
+                  <TableCell><Text maxLines={1}>{profile.username}</Text></TableCell>
+                  <TableCell><Text maxLines={1}>{profile.group}</Text></TableCell>
+                  <TableCell><HStack className="connection-manager-auth" gap={2} vAlign="center">
+                    {profile.authMethod === 'privateKey' ? <KeyRound aria-hidden /> : <LockKeyhole aria-hidden />}
+                    <Text>{profile.authMethod === 'privateKey' ? '私钥' : '密码'}</Text>
+                  </HStack></TableCell>
+                  <TableCell><HStack className="connection-manager-actions" gap={1} vAlign="center">
+                    <Button className="connection-manager-connect" label="连接" aria-label={`连接 ${profile.name}`} size="sm" variant="ghost" href={`/connections/${profile.id}/connect`} />
+                    <IconButton className="connection-manager-action" label={`编辑 ${profile.name}`} tooltip="编辑连接" icon={<Pencil size="1em" />} size="sm" variant="ghost" href={`/connections/${profile.id}/edit`} />
+                    <DropdownMenu presentation="popover" hasChevron={false} alignment="end" menuWidth="max-content"
+                      renderTrigger={triggerProps => <IconButton {...triggerProps} className="connection-manager-action" label={`${profile.name} 的更多操作`} tooltip="更多操作" icon={<MoreHorizontal size="1em" />} size="sm" variant="ghost" />}
+                      items={[{label: '删除连接', icon: <Trash2 size="1em" />, variant: 'destructive', onClick: () => { deletion.reset(); setRemoving(profile); }}]} />
+                  </HStack></TableCell>
+                </TableRow>)}
+              </TableBody>
+            </Table>
+          </StackItem>}
+        </VStack>
+      </HStack>
     </VStack>
   </Dialog>;
 }

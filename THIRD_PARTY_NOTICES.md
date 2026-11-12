@@ -25,3 +25,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 Other dependencies remain subject to their individual package licenses. This notice does not assign a license to OrbitShell's original code.
+
+## Material Icon Theme
+
+The remote file browser includes a curated subset of SVG icons and file/folder associations from Material Icon Theme 5.40.0.
+
+Source: https://github.com/material-extensions/vscode-material-icon-theme
+
+Copyright (c) 2025 Material Extensions
+
+Licensed under the MIT License. The full license is retained in [src/assets/file-icons/material/LICENSE](src/assets/file-icons/material/LICENSE).

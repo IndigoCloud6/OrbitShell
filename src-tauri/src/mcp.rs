@@ -15,6 +15,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+use crate::executions::{ExecutionTracker, OUTPUT_LIMIT};
 
 const PORT: u16 = 43123;
 const TOOLS: &[&str] = &["list_connections", "list_sessions", "open_connection", "execute_command", "send_input", "read_output", "disconnect"];
@@ -181,41 +182,76 @@ impl OrbitTools {
         self.ensure_enabled()?;
         if args.command.is_empty() || args.command.len() > 64 * 1024 { return Err(failure("Command must contain 1 to 65536 bytes")); }
         let live = self.app.state::<AppState>().session(&args.session_id).map_err(failure)?;
+        if !live.connected.load(Ordering::Acquire) { return Err(failure("SSH authentication is not complete")); }
         let connection = live.connection.get().ok_or_else(|| failure("SSH authentication is not complete"))?.clone();
-        let command = async {
-            let mut channel = connection.channel_open_session().await.map_err(failure)?;
+        let mut tracker = ExecutionTracker::begin(self.app.clone(), args.session_id.clone(), &live.profile, "execute_command", Some(args.command.clone())).map_err(failure)?;
+        enum Completion { Exited(Option<u32>), Truncated }
+        let mut channel = None;
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let operation = async {
+            channel = Some(connection.channel_open_session().await.map_err(failure)?);
+            let channel = channel.as_mut().ok_or_else(|| failure("SSH exec channel is unavailable"))?;
             channel.exec(true, args.command.as_bytes()).await.map_err(failure)?;
-            let mut stdout = Vec::new(); let mut stderr = Vec::new(); let mut code = None;
-            let deadline = tokio::time::sleep(Duration::from_secs(args.timeout_seconds.unwrap_or(30).clamp(1, 300)));
-            tokio::pin!(deadline);
+            let mut code = None;
             loop {
-                let message = tokio::select! {
-                    _ = live.cancel.cancelled() => { let _ = channel.close().await; return Err(failure("Session closed")); },
-                    _ = &mut deadline => {
-                        let _ = channel.signal(russh::Sig::TERM).await;
-                        let _ = channel.close().await;
-                        return result(json!({"timedOut": true, "stdout": String::from_utf8_lossy(&stdout), "stderr": String::from_utf8_lossy(&stderr),
-                            "note": "Cancellation was requested; remote process termination depends on the SSH server."}));
+                match channel.wait().await {
+                    Some(russh::ChannelMsg::Data {data}) => {
+                        let count = tracker.append("stdout", &data);
+                        stdout.extend_from_slice(&data[..count]);
+                        if count < data.len() { return Ok(Completion::Truncated); }
                     },
-                    message = channel.wait() => message,
-                };
-                match message {
-                    Some(russh::ChannelMsg::Data {data}) => stdout.extend_from_slice(&data),
-                    Some(russh::ChannelMsg::ExtendedData {data, ..}) => stderr.extend_from_slice(&data),
+                    Some(russh::ChannelMsg::ExtendedData {data, ..}) => {
+                        let count = tracker.append("stderr", &data);
+                        stderr.extend_from_slice(&data[..count]);
+                        if count < data.len() { return Ok(Completion::Truncated); }
+                    },
                     Some(russh::ChannelMsg::ExitStatus {exit_status}) => code = Some(exit_status),
                     Some(russh::ChannelMsg::Failure) => return Err(failure("Server rejected exec. Use send_input and read_output for this bastion.")),
-                    Some(russh::ChannelMsg::Close) | None => break,
+                    Some(russh::ChannelMsg::Close) | None => return Ok(Completion::Exited(code)),
                     _ => {}
                 }
-                if stdout.len() + stderr.len() > 512 * 1024 {
-                    let _ = channel.signal(russh::Sig::TERM).await;
-                    let _ = channel.close().await;
-                    return result(json!({"truncated": true, "stdout": String::from_utf8_lossy(&stdout), "stderr": String::from_utf8_lossy(&stderr)}));
-                }
+                if stdout.len() + stderr.len() >= OUTPUT_LIMIT { return Ok(Completion::Truncated); }
             }
-            result(json!({"exitCode": code, "stdout": String::from_utf8_lossy(&stdout), "stderr": String::from_utf8_lossy(&stderr), "timedOut": false}))
         };
-        timeout(Duration::from_secs(330), command).await.map_err(failure)?
+        let outcome = tokio::select! {
+            _ = live.cancel.cancelled() => None,
+            outcome = timeout(Duration::from_secs(args.timeout_seconds.unwrap_or(30).clamp(1, 300)), operation) => Some(outcome),
+        };
+        let mut terminate = false;
+        let response = match outcome {
+            None => {
+                tracker.finish("cancelled", None, "会话已断开，执行已中断");
+                Err(failure("Session closed"))
+            },
+            Some(Err(_)) => {
+                terminate = true;
+                tracker.finish("timedOut", None, "执行已超时，已请求停止；远端进程状态以服务器为准");
+                result(json!({"timedOut": true, "exitCode": null, "stdout": String::from_utf8_lossy(&stdout), "stderr": String::from_utf8_lossy(&stderr),
+                    "note": "Cancellation was requested; remote process termination depends on the SSH server."}))
+            },
+            Some(Ok(Err(error))) => {
+                tracker.finish("failed", None, &error.to_string());
+                Err(error)
+            },
+            Some(Ok(Ok(Completion::Truncated))) => {
+                terminate = true;
+                tracker.finish("truncated", None, "输出达到保留上限，已截断并请求停止；远端进程状态以服务器为准");
+                result(json!({"truncated": true, "exitCode": null, "stdout": String::from_utf8_lossy(&stdout), "stderr": String::from_utf8_lossy(&stderr)}))
+            },
+            Some(Ok(Ok(Completion::Exited(code)))) => {
+                tracker.finish(if code.is_some_and(|value| value != 0) { "failed" } else { "completed" }, code,
+                    if code.is_none() { "服务器未返回退出码" } else { "" });
+                result(json!({"exitCode": code, "stdout": String::from_utf8_lossy(&stdout), "stderr": String::from_utf8_lossy(&stderr), "timedOut": false}))
+            },
+        };
+        if let Some(channel) = channel {
+            let _ = timeout(Duration::from_secs(2), async {
+                if terminate { let _ = channel.signal(russh::Sig::TERM).await; }
+                let _ = channel.close().await;
+            }).await;
+        }
+        response
     }
 
     #[tool(description = "Send literal input to a visible connected terminal, including interactive bastion sessions. append_newline=true executes the input. This can run commands or answer prompts as the remote user. Read output with read_output.")]
@@ -224,8 +260,23 @@ impl OrbitTools {
         if args.data.len() > 64 * 1024 { return Err(failure("Input exceeds 65536 bytes")); }
         let live = self.app.state::<AppState>().session(&args.session_id).map_err(failure)?;
         if !live.connected.load(Ordering::Acquire) { return Err(failure("SSH is not connected")); }
+        // Interactive input can be a password or another sensitive prompt response.
+        // Record its target and delivery status, never the literal input.
+        let mut tracker = ExecutionTracker::begin(self.app.clone(), args.session_id.clone(), &live.profile, "send_input", None).map_err(failure)?;
         if args.append_newline.unwrap_or(false) { args.data.push('\r'); }
-        live.commands.send(SessionCommand::Input(args.data.into_bytes())).await.map_err(failure)?;
+        let sent = tokio::select! {
+            _ = live.cancel.cancelled() => Err(failure("Session closed")),
+            sent = timeout(Duration::from_secs(5), live.commands.send(SessionCommand::Input(args.data.into_bytes()))) => match sent {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(_)) => Err(failure("Session closed")),
+                Err(_) => Err(failure("Terminal input queue is busy; input was not sent")),
+            },
+        };
+        if let Err(error) = sent {
+            tracker.finish("failed", None, &error.to_string());
+            return Err(error);
+        }
+        tracker.finish("sent", None, "交互输入内容已隐藏。输出与当前终端共享，不单独判断命令退出码。");
         result(json!({"sent": true}))
     }
 

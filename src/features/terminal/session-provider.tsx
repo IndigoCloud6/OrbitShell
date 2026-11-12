@@ -28,11 +28,11 @@ export function SessionProvider({children}: {children: ReactNode}) {
   const [credentialRequests, setCredentialRequests] = useState<{profile: ConnectionProfile; ephemeral: boolean}[]>([]);
   const [launchError, setLaunchError] = useState('');
 
-  const adopt = useCallback((id: string, profile: ConnectionProfile) => {
+  const adopt = useCallback((id: string, profile: ConnectionProfile, ephemeral = false) => {
     if (runtimes.current.has(id)) return runtimes.current.get(id)!;
     const runtime = new TerminalRuntime(id, patch => setSessions(previous => previous.map(session => session.id === id ? {...session, ...patch} : session)));
     runtimes.current.set(id, runtime);
-    setSessions(previous => [...previous, {id, profile, status: 'connecting', message: '正在连接…', hostKey: null, columns: 120, rows: 36}]);
+    setSessions(previous => [...previous, {id, profile, ephemeral, status: 'connecting', message: '正在连接…', hostKey: null, columns: 120, rows: 36}]);
     setActiveId(id);
     return runtime;
   }, []);
@@ -40,7 +40,7 @@ export function SessionProvider({children}: {children: ReactNode}) {
   const start = useCallback((profile: ConnectionProfile, credential: string, ephemeral = false, options: AuthenticationOptions = {}) => {
     if (!isDesktop) throw new Error('SSH 连接需要在 OrbitShell 桌面端打开。');
     const id = crypto.randomUUID();
-    const runtime = adopt(id, profile);
+    const runtime = adopt(id, profile, ephemeral);
     void runtime.connect(profile, credential, ephemeral, options);
     return id;
   }, [adopt]);

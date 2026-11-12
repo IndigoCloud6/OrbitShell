@@ -49,6 +49,10 @@ pub struct Store {
     pub known_hosts: HashMap<String, String>,
     #[serde(default)]
     pub mcp_token: String,
+    #[serde(default)]
+    pub quick_commands: Vec<crate::quick_commands::QuickCommand>,
+    #[serde(default)]
+    pub quick_command_groups: Vec<String>,
 }
 
 pub struct Storage {

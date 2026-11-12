@@ -1,4 +1,4 @@
-import {createContext, useCallback, useContext, useEffect, useState} from 'react';
+import {createContext, useCallback, useContext, useEffect, useLayoutEffect, useState} from 'react';
 import type {Dispatch, ReactNode, SetStateAction} from 'react';
 import {errorMessage} from '../shared/desktop';
 
@@ -42,6 +42,10 @@ function read(): Preferences {
 export function PreferencesProvider({children}: {children: ReactNode}) {
   const [preferences, setPreferences] = useState(read);
   const [persistenceError, setError] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    document.documentElement.dataset.orbitDensity = preferences.uiDensity;
+    return () => { delete document.documentElement.dataset.orbitDensity; };
+  }, [preferences.uiDensity]);
   useEffect(() => {
     try { localStorage.setItem(key, JSON.stringify(preferences)); setError(null); }
     catch (error) { setError(`外观已更新，但保存偏好失败：${errorMessage(error)}`); }

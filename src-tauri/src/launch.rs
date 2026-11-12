@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,12 +21,19 @@ impl Drop for PendingLaunch {
     }
 }
 
+fn strip_wrapping_quotes(value: &str) -> &str {
+    value.strip_prefix('"').and_then(|inner| inner.strip_suffix('"')).unwrap_or(value)
+}
+
 fn decode(value: &str) -> Result<String, String> {
+    // Pasted launcher URLs can retain field quotes that Windows normally removes from argv.
+    // Unwrap before decoding so percent-encoded quotes remain part of the credential.
+    let value = strip_wrapping_quotes(value);
     percent_decode_str(value).decode_utf8().map(|value| value.into_owned()).map_err(|_| "链接中的字符编码无效".into())
 }
 
 pub fn parse_link(value: &str, username_mode: &str, title: Option<&str>) -> Result<PendingLaunch, String> {
-    let value = value.trim().trim_matches('"');
+    let value = strip_wrapping_quotes(value.trim());
     if value.len() > 32 * 1024 { return Err("会话链接过长".into()); }
     let (scheme, body) = value.split_once("://").ok_or("请使用 SSH 会话链接")?;
     let scheme = scheme.to_ascii_lowercase();
@@ -56,6 +63,7 @@ pub fn parse_link(value: &str, username_mode: &str, title: Option<&str>) -> Resu
         },
         None => (String::new(), None),
     };
+    let mut credential = Zeroizing::new(credential);
     let username = if username_mode == "decodeBase64" {
         if let Some(encoded) = user.strip_prefix("b64>>") {
             let bytes = STANDARD.decode(encoded).or_else(|_| STANDARD_NO_PAD.decode(encoded))
@@ -66,12 +74,12 @@ pub fn parse_link(value: &str, username_mode: &str, title: Option<&str>) -> Resu
     } else if username_mode == "preserve" { user }
     else { return Err("不支持的用户名处理方式".into()); };
     if username.len() > 4096 || username.chars().any(char::is_control) { return Err("链接中的用户名无效".into()); }
-    let name = title.filter(|title| !title.trim().is_empty()).map(|title| title.chars().filter(|character| !character.is_control()).take(80).collect())
+    let name = title.map(strip_wrapping_quotes).filter(|title| !title.trim().is_empty()).map(|title| title.chars().filter(|character| !character.is_control()).take(80).collect())
         .unwrap_or_else(|| if username.starts_with("b64>>") { format!("堡垒机 · {hostname}") } else { format!("{hostname}:{port}") });
     Ok(PendingLaunch {
         profile: ConnectionProfile { id: Uuid::new_v4().to_string(), name, group: "临时会话".into(),
             hostname, port, username, auth_method: "password".into(), private_key_path: None },
-        credential, created: Instant::now(),
+        credential: credential.take(), created: Instant::now(),
     })
 }
 
@@ -86,11 +94,13 @@ pub fn enqueue(app: &AppHandle, launch: PendingLaunch) -> Result<(), String> {
 }
 
 pub fn ingest_arguments(app: &AppHandle, arguments: Vec<String>) {
+    let arguments = Zeroizing::new(arguments);
     let title = arguments.iter().position(|argument| argument.eq_ignore_ascii_case("-newtab"))
         .and_then(|index| arguments.get(index + 1)).filter(|value| !value.starts_with('-') && !value.contains("://")).map(String::as_str);
-    for argument in &arguments {
-        let lower = argument.to_ascii_lowercase();
-        if lower.starts_with("ssh://") || lower.starts_with("xshell://") || lower.starts_with("orbitshell://") {
+    for argument in arguments.iter() {
+        let argument = strip_wrapping_quotes(argument.trim());
+        let Some((scheme, _)) = argument.split_once("://") else { continue; };
+        if scheme.eq_ignore_ascii_case("ssh") || scheme.eq_ignore_ascii_case("xshell") || scheme.eq_ignore_ascii_case("orbitshell") {
             if let Err(error) = parse_link(argument, "preserve", title).and_then(|launch| enqueue(app, launch)) {
                 let _ = app.emit_to("main", "orbitshell:launch-error", error);
             }
@@ -103,7 +113,8 @@ pub fn ingest_arguments(app: &AppHandle, arguments: Vec<String>) {
 
 #[tauri::command]
 pub fn open_external_link(url: String, username_mode: String, app: AppHandle) -> Result<(), String> {
-    enqueue(&app, parse_link(&url, &username_mode, None)?)
+    let url = Zeroizing::new(url);
+    enqueue(&app, parse_link(url.as_str(), &username_mode, None)?)
 }
 
 #[tauri::command]

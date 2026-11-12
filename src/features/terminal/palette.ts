@@ -18,7 +18,11 @@ export function terminalPalette(element: HTMLElement): TerminalPalette {
   const background = color('--color-background-body');
   const foreground = color('--color-text-primary');
   const accent = color('--color-text-accent');
-  const mutedAccent = color('--color-accent-muted');
+  const selection = color('--orbit-terminal-selection');
+  const inactiveSelection = color('--orbit-terminal-selection-inactive');
+  const selectionText = color('--orbit-terminal-selection-text');
+  const searchMatch = color('--orbit-search-match');
+  const activeSearchMatch = color('--orbit-search-active');
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 1;
   const context = canvas.getContext('2d');
@@ -36,7 +40,7 @@ export function terminalPalette(element: HTMLElement): TerminalPalette {
       theme: {
         background, foreground,
         cursor: foreground, cursorAccent: background,
-        selectionBackground: mutedAccent, selectionInactiveBackground: mutedAccent,
+        selectionBackground: selection, selectionInactiveBackground: inactiveSelection, selectionForeground: selectionText,
         black: color('--color-text-disabled'), brightBlack: color('--color-text-secondary'),
         red: color('--color-text-red'), green: color('--color-text-green'), yellow: color('--color-text-yellow'),
         blue: color('--color-text-blue'), magenta: color('--color-text-purple'), cyan: color('--color-text-cyan'), white: foreground,
@@ -44,9 +48,9 @@ export function terminalPalette(element: HTMLElement): TerminalPalette {
         brightBlue: color('--color-text-blue'), brightMagenta: color('--color-text-purple'), brightCyan: color('--color-text-cyan'), brightWhite: foreground,
       },
       decorations: {
-        matchBackground: hex(mutedAccent),
+        matchBackground: hex(searchMatch),
         matchOverviewRuler: hex(accent),
-        activeMatchBackground: hex(mutedAccent),
+        activeMatchBackground: hex(activeSearchMatch),
         activeMatchBorder: hex(accent),
         activeMatchColorOverviewRuler: hex(accent),
       },

@@ -8,11 +8,14 @@ import {TextInput} from '@astryxdesign/core/TextInput';
 import {Text} from '@astryxdesign/core/Text';
 import {IconButton} from '@astryxdesign/core/IconButton';
 import {ToggleButton} from '@astryxdesign/core/ToggleButton';
-import {ArrowDown, ArrowUp, CaseSensitive, Search, X} from 'lucide-react';
+import {Banner} from '@astryxdesign/core/Banner';
+import {ContextMenu} from '@astryxdesign/core/ContextMenu';
+import {ArrowDown, ArrowUp, CaseSensitive, Search, X, Copy, ClipboardPaste, TextSelect, BookmarkPlus, Eraser} from 'lucide-react';
 import {useThemePreference} from '../../app/theme';
 import {usePreferences} from '../../app/preferences';
 import {terminalPalette} from './palette';
 import type {ShellSession, TerminalRuntime} from './runtime';
+import {MenuShortcut, openContextMenuFromKeyboard, useCopyText} from '../../shared/context-menu';
 
 interface Props {
   session: ShellSession;
@@ -22,9 +25,11 @@ interface Props {
   searchOpen: boolean;
   searchRequest: number;
   onCloseSearch: () => void;
+  onOpenSearch?: () => void;
+  onSaveSelection?: (text: string) => void;
 }
 
-export function TerminalPane({session, runtime, active, fontSize, searchOpen, searchRequest, onCloseSearch}: Props) {
+export function TerminalPane({session, runtime, active, fontSize, searchOpen, searchRequest, onCloseSearch, onOpenSearch, onSaveSelection}: Props) {
   const host = useRef<HTMLElement | null>(null);
   const searchInput = useRef<HTMLInputElement | null>(null);
   const fit = useRef<FitAddon | null>(null);
@@ -34,6 +39,10 @@ export function TerminalPane({session, runtime, active, fontSize, searchOpen, se
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [results, setResults] = useState({resultIndex: -1, resultCount: 0});
   const [paletteVersion, setPaletteVersion] = useState(0);
+  const [clipboardError, setClipboardError] = useState('');
+  const contextSelection = useRef<{terminal: Terminal; text: string} | null>(null);
+  const [hasSelection, setHasSelection] = useState(false);
+  const copy = useCopyText();
   const {mode} = useThemePreference();
   const {setFontSize} = usePreferences();
 
@@ -45,7 +54,7 @@ export function TerminalPane({session, runtime, active, fontSize, searchOpen, se
     const terminal = new Terminal({
       fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "Microsoft YaHei", monospace',
       fontSize, lineHeight: 1.15, fontWeight: 'normal', fontWeightBold: '600', cursorBlink: true, cursorStyle: 'block', cursorInactiveStyle: 'outline',
-      scrollback: 10000, scrollOnUserInput: true,
+      scrollback: 10000, scrollOnUserInput: true, rightClickSelectsWord: false,
       allowProposedApi: true, disableStdin: true, theme: palette.theme,
     });
     const addon = new FitAddon();
@@ -74,13 +83,26 @@ export function TerminalPane({session, runtime, active, fontSize, searchOpen, se
     };
     element.addEventListener('wheel', wheel, {passive: false, capture: true});
     terminal.attachCustomKeyEventHandler(event => {
-      if (event.type !== 'keydown' || !event.ctrlKey || !event.shiftKey) return true;
+      if (event.type !== 'keydown' || event.isComposing || !event.ctrlKey || event.altKey || event.metaKey) return true;
       if (event.code === 'KeyC' && terminal.hasSelection()) {
-        void navigator.clipboard.writeText(terminal.getSelection()).catch(() => {});
+        event.preventDefault();
+        event.stopPropagation();
+        setClipboardError('');
+        void navigator.clipboard.writeText(terminal.getSelection()).catch(() => {
+          setClipboardError('无法写入系统剪贴板，请重试复制或使用“编辑 → 复制终端选区”。');
+        });
         return false;
       }
       if (event.code === 'KeyV') {
-        void navigator.clipboard.readText().then(text => terminal.paste(text)).catch(() => {});
+        event.preventDefault();
+        event.stopPropagation();
+        if (terminal.options.disableStdin) return false;
+        setClipboardError('');
+        void navigator.clipboard.readText().then(text => {
+          if (runtime.terminal === terminal && !terminal.options.disableStdin) terminal.paste(text);
+        }).catch(() => {
+          setClipboardError('无法读取系统剪贴板，请重试粘贴或使用“编辑 → 粘贴到终端”。');
+        });
         return false;
       }
       return true;
@@ -150,6 +172,14 @@ export function TerminalPane({session, runtime, active, fontSize, searchOpen, se
     const options: ISearchOptions = {caseSensitive, ...(decorations.current ? {decorations: decorations.current} : {})};
     if (previous) search.current.findPrevious(term, options); else search.current.findNext(term, options);
   }
+  const paste = () => {
+    const terminal = contextSelection.current?.terminal;
+    if (!terminal || terminal.options.disableStdin) return;
+    setClipboardError('');
+    void navigator.clipboard.readText().then(text => {
+      if (runtime.terminal === terminal && !terminal.options.disableStdin) terminal.paste(text);
+    }).catch(() => setClipboardError('无法读取系统剪贴板，请重试粘贴。'));
+  };
   const countLabel = !term ? '输入以查找' : results.resultCount < 0 ? '1000+ 个匹配' :
     results.resultCount ? `${Math.max(0, results.resultIndex + 1)} / ${results.resultCount}` : '无匹配';
 
@@ -160,7 +190,7 @@ export function TerminalPane({session, runtime, active, fontSize, searchOpen, se
         if (event.nativeEvent.isComposing) return;
         if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onCloseSearch(); }
       }}>
-      <StackItem size="fill"><TextInput ref={searchInput} label="查找终端内容" isLabelHidden placeholder="查找终端内容" size="sm" width="100%"
+      <StackItem size="fill"><TextInput ref={searchInput} label="查找终端内容" isLabelHidden placeholder="查找终端内容" size="sm" width="100%" controlClassName="terminal-search-control"
         startIcon={<Search size="1em" />} value={term} onChange={setTerm}
         onKeyDown={event => {
           if (event.nativeEvent.isComposing) return;
@@ -172,6 +202,37 @@ export function TerminalPane({session, runtime, active, fontSize, searchOpen, se
       <IconButton label="下一个匹配" tooltip="下一个 · Enter" icon={<ArrowDown size="1em" />} variant="ghost" size="sm" isDisabled={!term} onClick={() => find()} />
       <IconButton label="关闭查找" tooltip="关闭 · Esc" icon={<X size="1em" />} variant="ghost" size="sm" onClick={onCloseSearch} />
     </HStack>}
-    <StackItem ref={host} className="terminal-host" size="fill" />
+    {clipboardError && <Banner className="compact-feedback" status="warning" title="剪贴板操作未完成" description={clipboardError}
+      isDismissable onDismiss={() => setClipboardError('')} />}
+    <ContextMenu data-orbit-context="terminal" className="orbit-context-menu" label={`${session.profile.name}终端操作`} size="sm" menuWidth="calc(var(--orbit-unit) * 21)"
+      onMouseDownCapture={event => { if (event.button === 2) { event.preventDefault(); event.stopPropagation(); } }}
+      onKeyDownCapture={openContextMenuFromKeyboard}
+      onContextMenuCapture={() => {
+        const terminal = runtime.terminal;
+        const text = terminal?.getSelection() ?? '';
+        contextSelection.current = terminal ? {terminal, text} : null;
+        setHasSelection(Boolean(text));
+      }}
+      onContextMenu={event => event.stopPropagation()}
+      onOpenChange={open => { if (!open) contextSelection.current = null; }}
+      items={[
+        {label: '复制选中文本', icon: <Copy />, endContent: <MenuShortcut>Ctrl + C</MenuShortcut>, isDisabled: !hasSelection,
+          onClick: () => { const text = contextSelection.current?.text; if (text) void copy(text); }},
+        {label: '粘贴到终端', icon: <ClipboardPaste />, endContent: <MenuShortcut>Ctrl + V</MenuShortcut>, isDisabled: session.status !== 'connected', onClick: paste},
+        {label: '全选终端内容', icon: <TextSelect />, onClick: () => contextSelection.current?.terminal.selectAll()},
+        {type: 'divider'},
+        {label: '查找选中文本', icon: <Search />, isDisabled: !hasSelection || !onOpenSearch, onClick: () => {
+          const text = contextSelection.current?.text;
+          if (text) { setTerm(text); onOpenSearch?.(); }
+        }},
+        {label: '保存为快捷指令…', icon: <BookmarkPlus />, isDisabled: !hasSelection || !onSaveSelection, onClick: () => {
+          const text = contextSelection.current?.text;
+          if (text) onSaveSelection?.(text);
+        }},
+        {type: 'divider'},
+        {label: '清空终端显示', icon: <Eraser />, onClick: () => contextSelection.current?.terminal.clear()},
+      ]}>
+      <StackItem ref={host} className="terminal-host" size="fill" />
+    </ContextMenu>
   </StackItem>;
 }

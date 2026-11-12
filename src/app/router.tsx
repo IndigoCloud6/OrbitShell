@@ -14,6 +14,9 @@ export const router = createHashRouter([
     {path: 'connections/:connectionId/edit', lazy: async () => ({Component: (await import('../features/connections/dialogs')).ConnectionEditorRoute})},
     {path: 'connections/:connectionId/connect', lazy: async () => ({Component: (await import('../features/connections/dialogs')).CredentialsRoute})},
     {path: 'settings', lazy: async () => ({Component: (await import('../pages/settings-dialog')).default})},
+    {path: 'commands', lazy: async () => ({Component: (await import('../features/quick-commands/quick-commands')).QuickCommandManagerRoute})},
+    {path: 'commands/new', lazy: async () => ({Component: (await import('../features/quick-commands/quick-commands')).QuickCommandEditorRoute})},
+    {path: 'commands/:commandId/edit', lazy: async () => ({Component: (await import('../features/quick-commands/quick-commands')).QuickCommandEditorRoute})},
     {path: '*', lazy: async () => ({Component: (await import('../pages/not-found-dialog')).default})},
   ],
 }]);

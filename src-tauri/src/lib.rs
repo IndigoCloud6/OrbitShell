@@ -3,6 +3,8 @@ mod storage;
 mod credentials;
 mod launch;
 mod mcp;
+mod executions;
+mod quick_commands;
 
 use anyhow::{anyhow, Context};
 use russh_sftp::protocol::OpenFlags;
@@ -20,6 +22,7 @@ pub struct AppState {
     launches: Mutex<Vec<launch::PendingLaunch>>,
     mcp_enabled: AtomicBool,
     mcp_runtime: tokio::sync::Mutex<Option<mcp::RunningMcp>>,
+    executions: executions::ExecutionStore,
 }
 
 impl AppState {
@@ -130,7 +133,8 @@ pub(crate) fn start_session(app: AppHandle, mut request: ConnectRequest, events:
     }
     let (sender, receiver) = mpsc::channel(128);
     let live = Arc::new(LiveSession {
-        profile: profile.clone(), connected: AtomicBool::new(false), output: Mutex::new(OutputBuffer::new()),
+        profile: profile.clone(), is_temporary: request.profile.is_some(),
+        connected: AtomicBool::new(false), output: Mutex::new(OutputBuffer::new()),
         commands: sender, cancel: CancellationToken::new(), trust: Mutex::new(None),
         verification_error: Mutex::new(None), connection: OnceCell::new(), sftp: OnceCell::new(),
     });
@@ -186,16 +190,18 @@ async fn sftp_list(session_id: String, path: String, state: State<'_, AppState>)
     let live = state.session(&session_id)?;
     let result = tokio::select! {
         _ = live.cancel.cancelled() => Err(anyhow!("连接已关闭")),
-        result = timeout(Duration::from_secs(30), async {
+        result = async {
             let sftp = live.sftp().await?;
-            let path = sftp.canonicalize(if path.is_empty() { "." } else { &path }).await?;
-            let mut entries: Vec<_> = sftp.read_dir(&path).await?.map(|entry| {
-                let meta = entry.metadata();
-                RemoteEntry { name: entry.file_name(), path: entry.path(), is_directory: meta.is_dir(), is_symlink: meta.is_symlink(), size: meta.len() }
-            }).collect();
-            entries.sort_by(|left, right| right.is_directory.cmp(&left.is_directory).then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase())));
-            Ok::<_, anyhow::Error>(RemoteDirectory { path, entries })
-        }) => result.context("读取目录超时，请重试").and_then(|value| value),
+            timeout(Duration::from_secs(30), async {
+                let path = sftp.canonicalize(if path.is_empty() { "." } else { &path }).await?;
+                let mut entries: Vec<_> = sftp.read_dir(&path).await?.map(|entry| {
+                    let meta = entry.metadata();
+                    RemoteEntry { name: entry.file_name(), path: entry.path(), is_directory: meta.is_dir(), is_symlink: meta.is_symlink(), size: meta.len() }
+                }).collect();
+                entries.sort_by(|left, right| right.is_directory.cmp(&left.is_directory).then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase())));
+                Ok::<_, anyhow::Error>(RemoteDirectory { path, entries })
+            }).await.context("读取目录超时，请重试")?
+        } => result,
     };
     result.map_err(|error| format!("{error:#}"))
 }
@@ -300,7 +306,7 @@ pub fn run() {
                 }
             }
             app.manage(AppState { storage, sessions: Mutex::new(HashMap::new()), launches: Mutex::new(Vec::new()),
-                mcp_enabled: AtomicBool::new(false), mcp_runtime: tokio::sync::Mutex::new(None) });
+                mcp_enabled: AtomicBool::new(false), mcp_runtime: tokio::sync::Mutex::new(None), executions: executions::ExecutionStore::default() });
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             launch::ingest_arguments(app.handle(), std::env::args().skip(1).collect());
             #[cfg(target_os = "macos")]
@@ -336,6 +342,9 @@ pub fn run() {
             credential_status, save_connection_credential, forget_connection_credential,
             ssh_connect, ssh_write, ssh_resize, ssh_acknowledge, ssh_trust_host, ssh_disconnect,
             sftp_list, sftp_download, sftp_upload, mcp::mcp_status, mcp::mcp_set_enabled,
+            executions::execution_list, executions::execution_output, executions::execution_clear,
+            quick_commands::list_quick_commands, quick_commands::save_quick_command, quick_commands::delete_quick_command,
+            quick_commands::save_quick_command_group, quick_commands::delete_quick_command_group,
             launch::open_external_link, launch::take_launch_requests, launch::register_ssh_protocol])
         .run(tauri::generate_context!())
         .expect("OrbitShell could not start");
