@@ -1,11 +1,13 @@
 @layer orbitshell {
   html, body, #root { height: 100%; margin: 0; overflow: hidden; }
   html[data-orbit-density="comfortable"] { --orbit-density-unit: 1rem; }
-  body { font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif; }
-  [data-orbit-context="application"] { width: 100%; height: 100%; min-width: 0; min-height: 0; user-select: text; -webkit-user-select: text; }
+  body { font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif; user-select: none; -webkit-user-select: none; }
+  [data-orbit-context="application"] { width: 100%; height: 100%; min-width: 0; min-height: 0; user-select: none; -webkit-user-select: none; }
+  /* Keep selection in command output and editable content, not application chrome. */
+  :where(input, textarea, [contenteditable="true"], .cm-content, .terminal-host, .execution-output) { user-select: text; -webkit-user-select: text; }
   .application-context-content { width: 100%; min-width: 0; min-height: 0; overflow: hidden; }
   [data-orbit-context="terminal"] { display: flex; flex-direction: column; flex: 1 1 0%; min-width: 0; min-height: 0; }
-  [data-orbit-context="editor"] { display: flex; flex-direction: column; flex: 1 1 0%; min-width: 0; min-height: 0; user-select: text; -webkit-user-select: text; }
+  [data-orbit-context="editor"] { display: flex; flex-direction: column; flex: 1 1 0%; min-width: 0; min-height: 0; user-select: none; -webkit-user-select: none; }
   [data-orbit-context="files"] { width: 100%; min-height: 100%; min-width: 0; }
   [data-orbit-context="files"][data-directory-empty="true"] { display: flex; flex-direction: column; height: 100%; }
   [data-orbit-context="files"][data-directory-empty="true"] .file-columns { flex-shrink: 0; }
@@ -17,7 +19,7 @@
   /* Workbench regions own their scrolling; the shell is a fixed viewport. */
   .ide-shell [role="main"] { min-width: 0; min-height: 0; overflow: clip; }
   .workbench-frame { width: 100%; max-width: 100%; min-width: 0; min-height: 0; max-height: 100%; overflow: clip; }
-  .workspace-stack { width: 100%; max-width: 100%; overflow: hidden; }
+  .workspace-stack { width: 100%; max-width: 100%; overflow: clip; }
   .workspace-header { position: relative; height: var(--orbit-title-height); min-height: var(--orbit-title-height); flex-shrink: 0; user-select: none; border-bottom: thin solid var(--color-border); background: var(--orbit-titlebar); }
   .brand { padding-inline: calc(var(--orbit-unit) * 1.25); flex-shrink: 0; white-space: nowrap; }
   .orbit-mark { display: block; flex-shrink: 0; object-fit: contain; user-select: none; }
@@ -40,6 +42,9 @@
   .activity-action[data-active="true"]::before { content: ""; position: absolute; inset-block: 0; inset-inline-start: 0; width: calc(var(--orbit-unit) * .25); background: var(--color-accent); }
   .activity-settings { min-height: calc(var(--orbit-unit) * 3.5); }
   .server-panel, .remote-panel { background: var(--color-background-surface); }
+  /* Constrain the rendered widths without changing the user's saved drag sizes. */
+  .workbench-frame[data-sidebars="both"] .server-panel { max-width: max(200px, calc((100vw - var(--orbit-rail-width) - var(--orbit-workspace-min-width)) * .44)); }
+  .workbench-frame[data-sidebars="both"] .remote-panel { max-width: max(260px, calc((100vw - var(--orbit-rail-width) - var(--orbit-workspace-min-width)) * .56)); }
   .panel-hidden { display: none; }
   .ide-splitter { flex-basis: 0; width: 0; min-width: 0; }
   .workspace-stack, .file-panel, .file-browser, .connection-explorer, .connection-tree { min-width: 0; min-height: 0; }
@@ -203,7 +208,7 @@
   .compact-feedback :where(span, p) { font-size: inherit; }
   .host-key-server { font-size: var(--orbit-text-title); font-weight: 500; overflow-wrap: anywhere; }
   .host-key-details { padding: calc(var(--orbit-unit) * 1.25); border: thin solid var(--color-border); border-radius: calc(var(--orbit-unit) * .3); background: var(--color-background-surface); }
-  .host-fingerprint { user-select: text; overflow-wrap: anywhere; }
+  .host-fingerprint { overflow-wrap: anywhere; }
   .about-content { padding-block: calc(var(--orbit-unit) * 2.5); }
   .about-mark { width: calc(var(--orbit-unit) * 5.4); height: calc(var(--orbit-unit) * 5.4); }
   .about-name { font-size: calc(var(--orbit-unit) * 1.75); font-weight: 600; }
@@ -276,7 +281,7 @@
   .editor-history-footer button { font-size: var(--orbit-text-body); }
   .editor-comparison-layout { height: min(calc(var(--orbit-unit) * 54), calc(100dvh - var(--orbit-unit) * 6)); min-width: 0; min-height: 0; overflow: hidden; }
   .editor-diff-labels { flex-shrink: 0; border-bottom: thin solid var(--color-border); background: var(--orbit-table-head); }
-  .editor-diff-labels > * { min-width: 0; padding: calc(var(--orbit-unit) * .6) calc(var(--orbit-unit) * .85); }
+  .editor-diff-labels > * { flex: 1 1 0%; min-width: 0; padding: calc(var(--orbit-unit) * .6) calc(var(--orbit-unit) * .85); }
   .editor-diff-labels > * + * { border-inline-start: thin solid var(--color-border); }
   .editor-diff-labels :where(.astryx-text) { font-size: var(--orbit-text-body); }
   .editor-diff-host { min-height: 0; min-width: 0; overflow: hidden; }
@@ -322,9 +327,11 @@
   .workspace-tools { flex-shrink: 0; min-height: var(--orbit-tools-tab-height); border-top: thin solid var(--color-border); background: var(--color-background-surface); font-size: var(--orbit-tools-text-body); line-height: 1.5; }
   /* Text and control labels share the dock's scale instead of their component defaults. */
   .workspace-tools :where(.astryx-text, button, input, label) { font-size: inherit; line-height: inherit; }
-  .workspace-tools.is-open { max-height: 60dvh; border-top: 0; }
+  .workspace-tools.is-open { min-height: 0; max-height: 60dvh; overflow: clip; border-top: 0; }
   .tools-resize-handle { flex-shrink: 0; z-index: 3; }
   .tools-heading { height: var(--orbit-tools-tab-height); min-height: var(--orbit-tools-tab-height); flex-shrink: 0; padding-inline: calc(var(--orbit-unit) * .65); border-bottom: thin solid var(--color-border); }
+  .tools-tabs { flex: 0 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+  .tools-collapse, .clear-transfers, .tool-tab { flex-shrink: 0; }
   .tool-tab { position: relative; height: var(--orbit-tools-tab-height); min-height: var(--orbit-tools-tab-height); padding-inline: calc(var(--orbit-unit) * .9); font-size: var(--orbit-tools-text-body); font-weight: 400; border: 0; border-radius: 0; background: transparent; }
   .tool-tab[data-active="true"]::after { content: ""; height: calc(var(--orbit-unit) * .2); position: absolute; inset-inline: 0; inset-block-end: 0; background: var(--color-accent); }
   .tool-tab[data-active="true"] { color: var(--color-text-accent); font-weight: 500; }
@@ -348,6 +355,8 @@
   .execution-panel, .quick-panel, .quick-tools { min-width: 0; min-height: 0; overflow: hidden; }
   .feature-toolbar { flex-shrink: 0; padding: calc(var(--orbit-unit) * .55) calc(var(--orbit-unit) * .75); border-bottom: thin solid var(--color-border); }
   .feature-toolbar-label { font-weight: 500; white-space: nowrap; }
+  .execution-filters { min-width: 0; }
+  .execution-toolbar-actions { min-width: 0; margin-inline-start: auto; }
   .feature-toolbar button { font-size: var(--orbit-text-small); }
   .feature-search-control { width: calc(var(--orbit-unit) * 14); min-height: calc(var(--orbit-unit) * 2); }
   .feature-toolbar input { font-size: var(--orbit-text-small); }
@@ -398,6 +407,7 @@
   .workspace-tools .execution-shared-output { font-size: var(--orbit-tools-text-body); }
   .execution-retention { border-top: thin solid var(--color-border); }
   .execution-mcp-state { font-size: var(--orbit-text-small); white-space: nowrap; }
+  .execution-back, .execution-summary { display: none; }
   .quick-target { max-width: 50%; font-size: var(--orbit-text-small); }
   .workspace-tools .quick-target { font-size: var(--orbit-tools-text-meta); font-weight: 400; }
   .quick-content { flex: 1 1 0%; flex-direction: row; min-width: 0; min-height: 0; overflow: hidden; }
@@ -434,11 +444,16 @@
   .workspace-tools .compact-feedback button { height: calc(var(--orbit-unit) * 1.8); min-height: calc(var(--orbit-unit) * 1.8); padding-block: 0; font-size: var(--orbit-tools-text-meta); }
   @container orbit-tools (max-width: 52rem) {
     .execution-split { flex-direction: column; }
-    .execution-record-list { flex: 0 1 32%; min-height: calc(var(--orbit-unit) * 5); }
-    .execution-detail { flex: 1 1 0%; border-inline-start: 0; border-block-start: thin solid var(--color-border); }
+    .execution-record-list { flex: 1 1 0%; min-height: 0; }
+    .execution-detail { display: none; flex: 1 1 0%; border-inline-start: 0; }
+    .execution-split[data-detail-open="true"] .execution-record-list { display: none; }
+    .execution-split[data-detail-open="true"] .execution-detail { display: flex; }
     .execution-detail-header { gap: calc(var(--orbit-unit) * .25); }
-    .execution-mcp-state { display: none; }
-    .quick-panel .quick-groups { flex-basis: calc(var(--orbit-unit) * 9); width: calc(var(--orbit-unit) * 9); }
+    .execution-filters :is(.feature-toolbar-label, .execution-mcp-indicator), .execution-detail-header :is(.execution-metadata, .execution-address, .execution-detail-actions, .execution-result-note) { display: none; }
+    .execution-toolbar .feature-search-control { width: calc(var(--orbit-unit) * 11); }
+    .execution-back { display: flex; flex-shrink: 0; }
+    .execution-back svg { width: 1em; height: 1em; }
+    .execution-summary { display: block; font-size: var(--orbit-tools-text-meta); }
     .quick-target { max-width: calc(100% - var(--orbit-unit) * 2); }
   }
 

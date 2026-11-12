@@ -18,7 +18,7 @@ export function WorkspaceTools({transfers, logs, tab, open, onTab, onToggle, onC
 }) {
   // One size for the whole dock, independent of the active tab and its contents.
   // Keep the controller mounted while collapsed so reopening restores this size.
-  const panel = useResizable({direction: 'vertical', defaultSize: '32%', minSize: 180, maxSize: '60%', autoSaveId: 'orbitshell.ide.tools.v1'});
+  const panel = useResizable({direction: 'vertical', defaultSize: '32%', minSize: 0, maxSize: '60%', autoSaveId: 'orbitshell.ide.tools.v1'});
   return <>
     {open && <ResizeHandle className="tools-resize-handle" resizable={panel.props} direction="vertical" isReversed hasDivider isAlwaysVisible={false}
       label="调整底部工具面板高度" aria-controls="workspace-tools-panel" />}

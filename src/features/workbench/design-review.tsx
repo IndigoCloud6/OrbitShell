@@ -3,7 +3,6 @@ import {useEffect, useRef, useState} from 'react';
 import {useNavigate} from 'react-router';
 import {useResizable} from '@astryxdesign/core/Resizable';
 import {VStack, HStack, StackItem} from '@astryxdesign/core/Stack';
-import {Text} from '@astryxdesign/core/Text';
 import {IdeLayout} from './ide-layout';
 import {IdeTitlebar, ActivityRail, IdeStatusbar, SessionContextBar} from './ide-chrome';
 import type {ToolTab} from './ide-chrome';
@@ -17,6 +16,7 @@ import {FileBrowserView} from '../files/file-browser-view';
 import type {RemoteEntry} from '../files/file-utils';
 import type {Transfer} from '../files/transfer-provider';
 import {WorkspaceTools} from './workspace-tools';
+import {DesignReviewCommands, DesignReviewEditor, DesignReviewExecutions} from './design-review-extras';
 
 const profiles: ConnectionProfile[] = [
   ['api-prod-01', '生产环境', '192.0.2.24'], ['db-primary', '生产环境', '192.0.2.25'],
@@ -70,6 +70,7 @@ export default function DesignReview() {
   const [hidden, setHidden] = useState(false);
   const [compact, setCompact] = useState(true);
   const [find, setFind] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
   const runtime = useRef<TerminalRuntime | null>(null);
   if (!runtime.current) runtime.current = new TerminalRuntime('design-terminal', () => {});
   const left = useResizable({defaultSize: 276, minSize: 200, maxSize: 380});
@@ -86,21 +87,24 @@ export default function DesignReview() {
     activity={<ActivityRail showServers={servers} showFiles={files} toolTab={tab} toolsOpen={tools} onServers={() => setServers(!servers)} onFiles={() => setFiles(!files)}
       onSessions={() => { void navigate('/connections'); }} onTool={openTool} onSettings={() => { void navigate('/settings'); }} />}
     sidebar={<ConnectionExplorer profiles={profiles} sessions={initialSessions} activeId={active?.id ?? null} search={search} onSearch={setSearch}
-      onOpen={profile => { const session = sessions.find(row => row.profile.id === profile.id); if (session) setActive(session.id); }}
+      onOpen={profile => { const session = sessions.find(row => row.profile.id === profile.id); if (session) { setActive(session.id); setEditorOpen(false); } }}
       onCreate={() => { void navigate('/connections/new'); }} onManage={() => { void navigate('/connections'); }} />}
     files={<FileBrowserView connected entries={entries} path={path} selectedPath={selected} compact={compact} showHidden={hidden}
       onPath={setPath} onNavigate={setPath} onRefresh={() => {}} onHidden={() => setHidden(!hidden)} onDensity={() => setCompact(!compact)}
-      onUpload={() => {}} onDownload={() => {}} onSelect={entry => setSelected(entry.path)} onCollapse={() => setFiles(false)} />}
+      onUpload={() => {}} onDownload={() => {}} onSelect={entry => setSelected(entry.path)} onEdit={() => setEditorOpen(true)} onCollapse={() => setFiles(false)} />}
     footer={<IdeStatusbar active={active} mcpEnabled={false} />}
     showServers={servers} showFiles={files} serverWidth={left.size} filesWidth={right.size} serverResize={left.props} filesResize={right.props}>
     <VStack className="workspace-stack" height="100%" gap={0}>
-      <HStack className="session-tabs" gap={0} vAlign="center"><StackItem className="session-strip-container" size="fill"><SessionTabs sessions={sessions} activeId={active?.id ?? null} onSelect={setActive} onClose={id => setSessions(previous => previous.filter(row => row.id !== id))} onCreate={() => { void navigate('/connections'); }} /></StackItem></HStack>
-      {active && <SessionContextBar session={active} onSearch={() => setFind(true)} onReconnect={() => {}} onFiles={() => setFiles(!files)} />}
+      <HStack className="session-tabs" gap={0} vAlign="center"><StackItem className="session-strip-container" size="fill"><SessionTabs sessions={sessions} activeId={active?.id ?? null} onSelect={id => { setActive(id); setEditorOpen(false); }} onClose={id => setSessions(previous => previous.filter(row => row.id !== id))} onCreate={() => { void navigate('/connections'); }}
+        editors={[{id: 'review-editor', name: 'README.md', path: '/srv/orbit-api/README.md', sessionName: 'api-prod-01', dirty: true, saving: false, canSave: false}]} activeEditorId={editorOpen ? 'review-editor' : null}
+        onSelectEditor={() => setEditorOpen(true)} onCloseEditor={() => setEditorOpen(false)} /></StackItem></HStack>
+      {!editorOpen && active && <SessionContextBar session={active} onSearch={() => setFind(true)} onReconnect={() => {}} onFiles={() => setFiles(!files)} />}
       <StackItem size="fill" className="terminal-area">
-        {active && runtime.current && <TerminalPane session={active} runtime={runtime.current} active fontSize={17} searchOpen={find} searchRequest={0} onCloseSearch={() => setFind(false)} />}
+        {active && runtime.current && <TerminalPane session={active} runtime={runtime.current} active={!editorOpen} fontSize={17} searchOpen={find} searchRequest={0} onCloseSearch={() => setFind(false)} />}
+        <DesignReviewEditor active={editorOpen} />
       </StackItem>
       <WorkspaceTools transfers={transfers} logs={[]} tab={tab} open={tools} onTab={openTool} onToggle={() => setTools(!tools)} onClear={() => setTransfers(previous => previous.filter(row => row.status === 'running'))}
-        ai={<Text>本页面仅用于设计比对，未连接真实服务器。</Text>} />
+        ai={<DesignReviewExecutions />} commands={<DesignReviewCommands />} />
     </VStack>
   </IdeLayout>;
 }

@@ -24,7 +24,7 @@ import {commandGroups, deleteQuickCommand, deleteQuickGroup, filterCommands, qui
 import type {QuickCommand, QuickCommands} from './service';
 import {useQuickCommandDraft} from './command-draft';
 
-function Groups({collection, active, onSelect, onCreate, onRename, onRemove}: {
+export function QuickCommandGroups({collection, active, onSelect, onCreate, onRename, onRemove}: {
   collection: QuickCommands | undefined; active: string; onSelect: (group: string) => void;
   onCreate?: () => void; onRename?: (group: string) => void; onRemove?: (group: string) => void;
 }) {
@@ -44,7 +44,7 @@ function Groups({collection, active, onSelect, onCreate, onRename, onRemove}: {
   </VStack>;
 }
 
-function CommandRows({commands, manager = false, canSend = false, busy = false, onSend, onEdit, onCopy, onRemove}: {
+export function QuickCommandRows({commands, manager = false, canSend = false, busy = false, onSend, onEdit, onCopy, onRemove}: {
   commands: QuickCommand[]; manager?: boolean; canSend?: boolean; busy?: boolean;
   onSend?: (command: QuickCommand) => void; onEdit: (command: QuickCommand) => void;
   onCopy?: (command: QuickCommand) => void; onRemove?: (command: QuickCommand) => void;
@@ -117,9 +117,9 @@ export function QuickCommandPanel({onLocateTerminal}: {onLocateTerminal?: (id: s
     {error && <Banner className="compact-feedback" status="error" title="指令未发送" description={error} isDismissable onDismiss={() => setError('')} />}
     {query.error && <Banner className="compact-feedback" status="error" title="无法读取快捷指令" description={errorMessage(query.error)} endContent={<Button label="重试" size="sm" onClick={() => { void query.refetch(); }} />} />}
     <HStack className="quick-content" gap={0} vAlign="stretch">
-      <Groups collection={query.data} active={activeGroup} onSelect={setGroup} />
+      <QuickCommandGroups collection={query.data} active={activeGroup} onSelect={setGroup} />
       <StackItem className="quick-list-region" size="fill" isScrollable aria-label="快捷指令">
-        {commands.length > 0 && <CommandRows commands={commands} canSend={canSend} busy={busy} onSend={command => { void send(command); }} onEdit={command => { void navigate(`/commands/${command.id}/edit?return=workbench`); }} />}
+        {commands.length > 0 && <QuickCommandRows commands={commands} canSend={canSend} busy={busy} onSend={command => { void send(command); }} onEdit={command => { void navigate(`/commands/${command.id}/edit?return=workbench`); }} />}
         {!commands.length && !query.error && <VStack className="feature-empty" gap={2} hAlign="center" vAlign="center"><Terminal className="muted-icon" />
           <Text>{query.isPending ? '正在读取指令…' : query.data?.commands.length ? '没有匹配的指令' : '还没有快捷指令'}</Text>
           {!query.isPending && <Button label={query.data?.commands.length ? '清除筛选' : '新建快捷指令'} variant="ghost" size="sm" onClick={() => {
@@ -166,14 +166,14 @@ export function QuickCommandManagerRoute() {
           onOpenChange={open => { if (!open && !busy) void navigate('/'); }} />
         {error && !groupForm && !removing && !removingGroup && <Banner className="compact-feedback" status="error" title="操作未完成" description={error} />}
         <HStack className="quick-manager-body" gap={0} vAlign="stretch">
-          <Groups collection={query.data} active={active} onSelect={value => setFilter('group', value)} onCreate={() => { setError(''); setGroupForm({previous: null, name: ''}); }}
+          <QuickCommandGroups collection={query.data} active={active} onSelect={value => setFilter('group', value)} onCreate={() => { setError(''); setGroupForm({previous: null, name: ''}); }}
             onRename={value => { setError(''); setGroupForm({previous: value, name: value}); }} onRemove={value => { setError(''); setRemovingGroup(value); }} />
           <VStack className="quick-manager-main" gap={0}>
             <VStack className="feature-toolbar" gap={0}><TextInput label="搜索快捷指令" isLabelHidden type="search" value={search} onChange={value => setFilter('search', value)}
               placeholder="搜索名称或指令内容…" hasClear startIcon={<Search size="1em" />} width="100%" /></VStack>
             {query.error && <Banner status="error" title="无法读取快捷指令" description={errorMessage(query.error)} endContent={<Button label="重试" onClick={() => { void query.refetch(); }} />} />}
             <StackItem className="quick-list-region" size="fill" isScrollable aria-label="已保存的快捷指令">
-              {commands.length > 0 && <CommandRows commands={commands} manager busy={busy} onEdit={command => { void navigate(`/commands/${command.id}/edit`); }}
+              {commands.length > 0 && <QuickCommandRows commands={commands} manager busy={busy} onEdit={command => { void navigate(`/commands/${command.id}/edit`); }}
                 onCopy={command => { void mutate(() => saveQuickCommand({...command, id: crypto.randomUUID(), name: `${Array.from(command.name).slice(0, 35).join('')}（副本）`})); }}
                 onRemove={command => { setError(''); setRemoving(command); }} />}
               {!commands.length && !query.error && <VStack className="feature-empty" hAlign="center" vAlign="center" gap={3}><Terminal className="muted-icon" />

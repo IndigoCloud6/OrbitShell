@@ -69,6 +69,7 @@ export const orbitTheme = defineTheme({
     '--orbit-title-height': 'calc(var(--orbit-unit) * 2.875)',
     '--orbit-heading-height': 'calc(var(--orbit-unit) * 2.875)',
     '--orbit-rail-width': 'calc(var(--orbit-unit) * 3.2)',
+    '--orbit-workspace-min-width': '28rem',
     '--orbit-status-height': 'calc(var(--orbit-unit) * 2)',
   },
   components: {

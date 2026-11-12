@@ -24,7 +24,7 @@ interface Props {
 export function IdeLayout(props: Props) {
   const {uiDensity} = usePreferences();
   return <AppShell className="ide-shell" data-density={uiDensity ?? 'compact'} variant="section" height="fill" contentPadding={0} topNav={props.titlebar} mobileNav={false}>
-    <Layout className="workbench-frame" height="fill" padding={0}
+    <Layout className="workbench-frame" data-sidebars={props.showServers && props.showFiles ? 'both' : 'single'} height="fill" padding={0}
       footer={<LayoutFooter padding={0} hasDivider>{props.footer}</LayoutFooter>}
       content={<LayoutContent padding={0} isScrollable={false}>
         <Layout height="fill" padding={0} start={<>

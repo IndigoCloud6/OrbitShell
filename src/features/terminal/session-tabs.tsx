@@ -30,10 +30,25 @@ interface Props {
 
 export function SessionTabs({sessions, activeId, onSelect, onClose, onCreate, onReconnect, onDisconnect, editors = [], activeEditorId, onSelectEditor, onCloseEditor, onSaveEditor, onEditorHistory}: Props) {
   const items = useRef(new Map<string, HTMLElement>());
+  const strip = useRef<HTMLDivElement | null>(null);
   const copy = useCopyText();
   useEffect(() => {
     const id = activeEditorId ?? activeId;
-    if (id) items.current.get(id)?.scrollIntoView({block: 'nearest', inline: 'nearest'});
+    const element = strip.current;
+    if (!id || !element) return;
+    const keepVisible = () => {
+      const item = items.current.get(id);
+      if (!item) return;
+      const row = element.getBoundingClientRect();
+      const tab = item.getBoundingClientRect();
+      // Scroll only the tab strip, including after a sidebar or window resize.
+      if (tab.left < row.left) element.scrollLeft -= row.left - tab.left;
+      else if (tab.right > row.right) element.scrollLeft += tab.right - row.right;
+    };
+    keepVisible();
+    const observer = new ResizeObserver(keepVisible);
+    observer.observe(element);
+    return () => observer.disconnect();
   }, [activeId, activeEditorId, sessions.length, editors.length]);
   const tabIds = [...sessions.map(item => item.id), ...editors.map(item => item.id)];
   const navigateTabs = (event: KeyboardEvent<HTMLElement>, index: number) => {
@@ -52,7 +67,7 @@ export function SessionTabs({sessions, activeId, onSelect, onClose, onCreate, on
   };
 
   if (!sessions.length && !editors.length) return <HStack gap={0} vAlign="center"><Text className="tab-placeholder" type="supporting" color="secondary">终端工作区</Text><IconButton className="new-session" label="打开新会话" tooltip="打开新会话" icon={<Plus />} variant="ghost" onClick={onCreate} /></HStack>;
-  return <HStack role="group" aria-label="SSH 会话" gap={0} className="session-strip">
+  return <HStack ref={strip} role="group" aria-label="SSH 会话" gap={0} className="session-strip">
     {sessions.map((session, index) => {
       const active = !activeEditorId && session.id === activeId;
       const label = {connecting: '正在连接', hostKey: '等待确认指纹', connected: '已连接', closed: '已断开', error: '连接失败'}[session.status];

@@ -14,7 +14,20 @@ import {isDirty, snapshotLabel} from './types';
 import type {EditorDocument, RemoteText, SnapshotInfo} from './types';
 import type {EditorController} from './use-remote-editor';
 
-export function RemoteEditorPane({file, active, connected, controller}: {file: EditorDocument; active: boolean; connected: boolean; controller: EditorController}) {
+export interface EditorHistorySource {
+  list: (id: string) => Promise<SnapshotInfo[]>;
+  read: (id: string, snapshotId: string) => Promise<RemoteText>;
+}
+const desktopHistory: EditorHistorySource = {
+  list: id => desktopCommand<SnapshotInfo[]>('editor_snapshots', {id}),
+  read: (id, snapshotId) => desktopCommand<RemoteText>('editor_snapshot_read', {id, snapshotId}),
+};
+
+export function RemoteEditorPane({file, active, connected, controller, historySource = desktopHistory}: {
+  file: EditorDocument; active: boolean; connected: boolean;
+  controller: Pick<EditorController, 'patch' | 'save' | 'setComparison' | 'setRestoreRequest'>;
+  historySource?: EditorHistorySource;
+}) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [snapshots, setSnapshots] = useState<SnapshotInfo[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -30,22 +43,22 @@ export function RemoteEditorPane({file, active, connected, controller}: {file: E
     if (!historyOpen) return;
     let cancelled = false;
     setLoading(true); setHistoryError('');
-    void desktopCommand<SnapshotInfo[]>('editor_snapshots', {id: file.id}).then(items => {
+    void historySource.list(file.id).then(items => {
       if (cancelled) return;
       setSnapshots(items); setSelectedId(previous => items.some(item => item.id === previous) ? previous : items[0]?.id ?? null);
     }).catch(failure => { if (!cancelled) setHistoryError(errorMessage(failure)); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [historyOpen, file.id, file.document.revision, reload]);
+  }, [historyOpen, file.id, file.document.revision, reload, historySource]);
   useEffect(() => {
     setPreview(null);
     if (!historyOpen || !selectedId) return;
     let cancelled = false;
     setPreviewLoading(true); setHistoryError('');
-    void desktopCommand<RemoteText>('editor_snapshot_read', {id: file.id, snapshotId: selectedId}).then(text => {
+    void historySource.read(file.id, selectedId).then(text => {
       if (!cancelled) setPreview(text);
     }).catch(failure => { if (!cancelled) setHistoryError(errorMessage(failure)); }).finally(() => { if (!cancelled) setPreviewLoading(false); });
     return () => { cancelled = true; };
-  }, [historyOpen, selectedId, file.id, reload]);
+  }, [historyOpen, selectedId, file.id, reload, historySource]);
   const selected = snapshots.find(item => item.id === selectedId);
   return <VStack className="remote-editor" height="100%" gap={0} hidden={!active} role="region" aria-label={`${file.name}远程文件编辑器`}>
     <HStack className="editor-toolbar" gap={2} vAlign="center" wrap="wrap">
