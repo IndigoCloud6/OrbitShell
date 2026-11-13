@@ -28,12 +28,12 @@ export function SessionProvider({children}: {children: ReactNode}) {
   const [credentialRequests, setCredentialRequests] = useState<{profile: ConnectionProfile; ephemeral: boolean}[]>([]);
   const [launchError, setLaunchError] = useState('');
 
-  const adopt = useCallback((id: string, profile: ConnectionProfile, ephemeral = false) => {
+  const adopt = useCallback((id: string, profile: ConnectionProfile, ephemeral = false, focus = true) => {
     if (runtimes.current.has(id)) return runtimes.current.get(id)!;
     const runtime = new TerminalRuntime(id, patch => setSessions(previous => previous.map(session => session.id === id ? {...session, ...patch} : session)));
     runtimes.current.set(id, runtime);
     setSessions(previous => [...previous, {id, profile, ephemeral, status: 'connecting', message: '正在连接…', hostKey: null, columns: 120, rows: 36}]);
-    setActiveId(id);
+    if (focus) setActiveId(id);
     return runtime;
   }, []);
 
@@ -81,7 +81,7 @@ export function SessionProvider({children}: {children: ReactNode}) {
       finally { draining = false; }
     };
     void Promise.all([
-      listen<{id: string; profile: ConnectionProfile}>('orbitshell:session-opened', event => adopt(event.payload.id, event.payload.profile)),
+      listen<{id: string; profile: ConnectionProfile}>('orbitshell:session-opened', event => adopt(event.payload.id, event.payload.profile, false, false)),
       listen<{sessionId: string; event: SessionEvent}>('orbitshell:session-event', event => runtimes.current.get(event.payload.sessionId)?.receive(event.payload.event)),
       listen('orbitshell:launch-available', () => { void drain(); }),
       listen<string>('orbitshell:launch-error', event => setLaunchError(event.payload)),

@@ -5,9 +5,11 @@ const descriptions: Record<string, string> = {
   list_connections: '列出已保存的连接',
   list_sessions: '列出当前会话',
   open_connection: '打开指定连接',
-  execute_command: '通过 SSH exec 通道执行命令',
-  send_input: '向交互终端发送输入',
-  read_output: '读取终端输出',
+  execute_command: '按明确的终端绑定执行：独立 Shell 或已接管的原标签',
+  send_input: '透传输入；兼容 action=takeover / release 控制原终端',
+  read_output: '读取绑定终端输出，接管模式读取原标签保留的缓冲',
+  take_over_session: '接管已登录的原标签，复用同一 PTY 并锁定人工输入',
+  release_session: '交回人工，停止接管权限，不自动终止远端命令',
   disconnect: '断开指定会话',
 };
 

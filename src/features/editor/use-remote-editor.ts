@@ -44,6 +44,7 @@ export function useRemoteEditor() {
     setActiveId(id); selectSession(sessionsRef.current.some(session => session.id === file.sessionId) ? file.sessionId : null);
   }, [selectSession]);
   const showTerminal = useCallback((id: string) => { intent.current++; setActiveId(null); selectSession(id); }, [selectSession]);
+  const showUtility = useCallback(() => { intent.current++; setActiveId(null); }, []);
   useEffect(() => {
     const file = documentsRef.current.find(item => item.id === activeRef.current);
     if (file && sessionId !== null && file.sessionId !== sessionId) { intent.current++; setActiveId(null); }
@@ -172,7 +173,7 @@ export function useRemoteEditor() {
   const find = useCallback(() => { const file = documentsRef.current.find(item => item.id === activeRef.current); if (file) patch(file.id, {searchRequest: file.searchRequest + 1}); }, [patch]);
   const tabs: EditorTab[] = documents.map(file => ({id: file.id, name: file.name, path: file.path, sessionName: file.sessionName,
     dirty: isDirty(file), saving: file.saving, canSave: sessions.some(session => session.id === file.sessionId && session.status === 'connected')}));
-  return {documents, activeId, active, tabs, opening, error, clearError: () => setError(''), open, activate, showTerminal, save, requestClose, patch,
+  return {documents, activeId, active, tabs, opening, error, clearError: () => setError(''), open, activate, showTerminal, showUtility, save, requestClose, patch,
     comparison, setComparison, conflictId, setConflictId, closing, cancelClose, closingBusy, finishClose,
     restoreRequest, setRestoreRequest,
     history: (id: string) => { const file = documentsRef.current.find(item => item.id === id); if (file) { activate(id); patch(id, {historyRequest: file.historyRequest + 1}); } },

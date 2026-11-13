@@ -82,7 +82,8 @@ impl OutputBuffer {
     }
 }
 pub enum SessionCommand {
-    Input(Vec<u8>),
+    Input { data: Vec<u8>, history: Option<(String, String)> },
+    AiInput { owner: String, data: Zeroizing<Vec<u8>>, complete: oneshot::Sender<std::result::Result<(), String>> },
     Resize(u32, u32),
     Acknowledge(usize),
 }
@@ -275,13 +276,25 @@ pub async fn run_session(
             let channel = channel?;
             let (mut reader, writer) = channel.split();
             live.connected.store(true, Ordering::Release);
+            app.state::<AppState>().history.register(&request.session_id, &live);
+            crate::recent::record_connected(&app, &live, &request.session_id);
             events.send(SessionEvent::Status { status: "connected".into(), message: "已连接".into() })?;
             let mut outstanding = 0usize;
             let mut exit_code = None;
             loop {
                 tokio::select! {
                     command = commands.recv() => match command {
-                        Some(SessionCommand::Input(data)) => writer.data_bytes(data).await?,
+                        Some(SessionCommand::Input { data, history }) => {
+                            if !app.state::<AppState>().ai.taken_over(&request.session_id) {
+                                writer.data_bytes(data).await?;
+                                if let Some((id, command)) = history { app.state::<AppState>().history.record(&app, &request.session_id, id, &command, None); }
+                            }
+                        },
+                        Some(SessionCommand::AiInput { owner, data, complete }) => {
+                            let owns = app.state::<AppState>().ai.owns(&owner, &request.session_id);
+                            let result = if owns { writer.data_bytes(data.to_vec()).await.map_err(|_| "AI 输入发送失败".to_string()) } else { Err("AI 接管已结束，输入未发送".into()) };
+                            let _ = complete.send(result);
+                        },
                         Some(SessionCommand::Resize(columns, rows)) => writer.window_change(columns.clamp(20, 500), rows.clamp(5, 300), 0, 0).await?,
                         Some(SessionCommand::Acknowledge(bytes)) => outstanding = outstanding.saturating_sub(bytes),
                         None => break,
@@ -290,6 +303,7 @@ pub async fn run_session(
                         Some(ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. }) => {
                             outstanding += data.len();
                             if let Ok(mut output) = live.output.lock() { output.append(&data); }
+                            app.state::<AppState>().ai.source_output(&app, &request.session_id);
                             events.send(SessionEvent::Data { data: data.to_vec() })?;
                         }
                         Some(ChannelMsg::ExitStatus { exit_status }) => exit_code = Some(exit_status),

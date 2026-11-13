@@ -8,6 +8,7 @@ import {Button} from '@astryxdesign/core/Button';
 import {Selector} from '@astryxdesign/core/Selector';
 import {TextInput} from '@astryxdesign/core/TextInput';
 import {Banner} from '@astryxdesign/core/Banner';
+import {CheckboxInput} from '@astryxdesign/core/CheckboxInput';
 import {List, ListItem} from '@astryxdesign/core/List';
 import {StatusDot} from '@astryxdesign/core/StatusDot';
 import {Moon, Sun, Monitor, Palette, Network, ShieldCheck, Copy, Link2} from 'lucide-react';
@@ -17,8 +18,7 @@ import {desktopCommand, errorMessage, isDesktop} from '../shared/desktop';
 import {desktopStatusKey} from '../shared/desktop-lifecycle';
 import type {DesktopStatus} from '../shared/desktop-lifecycle';
 import {McpToolList} from '../features/workbench/mcp-tool-list';
-
-interface McpStatus {enabled: boolean; url: string | null; token: string; tools: string[]}
+import {useMcpStatus} from '../features/ai/mcp-status';
 
 const shortcuts = [
   {label: '新建连接', keys: 'Ctrl + Shift + T'},
@@ -42,7 +42,7 @@ export default function SettingsDialog() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState('');
-  const mcp = useQuery({queryKey: ['mcp-status'], queryFn: () => desktopCommand<McpStatus>('mcp_status'), enabled: isDesktop, retry: false});
+  const mcp = useMcpStatus();
   const desktop = useQuery<DesktopStatus>({queryKey: desktopStatusKey, queryFn: () => desktopCommand('desktop_status'), enabled: isDesktop, retry: false});
   const [link, setLink] = useState('');
   const [usernameMode, setUsernameMode] = useState('preserve');
@@ -161,7 +161,13 @@ export default function SettingsDialog() {
                   <Button label={mcp.data?.enabled ? '关闭 MCP' : '开启 MCP'} variant={mcp.data?.enabled ? 'secondary' : 'primary'} isLoading={busy}
                     isDisabled={mcp.isPending || Boolean(mcp.error)} onClick={() => { void toggleMcp(); }} />
                 </HStack>
-                <Text type="supporting" color="secondary">仅监听本机回环地址，每次启动应用后按需开启。</Text>
+                <CheckboxInput label="启动程序时自动开启 MCP" value={Boolean(mcp.data?.autoStart)} isDisabled={busy || mcp.isPending || Boolean(mcp.error)}
+                  description="关闭时，每次启动后需要手动开启。此设置不改变当前服务状态。" onChange={value => {
+                    setBusy(true); setError('');
+                    void desktopCommand('mcp_set_auto_start', {autoStart: value}).then(() => mcp.refetch()).catch(failure => setError(errorMessage(failure))).finally(() => setBusy(false));
+                  }} />
+                {mcp.data?.startupError && <Banner status="warning" title="MCP 自动启动失败" description={mcp.data.startupError} />}
+                <Text type="supporting" color="secondary">仅监听本机回环地址，启动方式保存在本机。</Text>
                 {mcp.data?.enabled && <VStack gap={4}>
                   <TextInput label="MCP 地址" value={mcp.data.url ?? ''} isReadOnly width="100%" controlClassName="orbit-input" />
                   <TextInput label="访问令牌" value={mcp.data.token} type="password" isReadOnly autoComplete="off" width="100%" controlClassName="orbit-input" />
@@ -173,7 +179,12 @@ export default function SettingsDialog() {
                     }} />
                     {feedback && <Text color="accent" role="status">{feedback}</Text>}
                   </HStack>
-                  <VStack className="settings-section" gap={3}><Text className="settings-section-title">可用工具</Text><McpToolList tools={mcp.data.tools} /></VStack>
+                  <VStack className="settings-section" gap={3}>
+                    <Text className="settings-section-title">服务端已注册工具 · {mcp.data.tools.length}</Text>
+                    <Text type="supporting" color="secondary">会话控制协议：{mcp.data.protocolVersion}</Text>
+                    <McpToolList tools={mcp.data.tools} />
+                    <Text type="supporting" color="secondary">此清单来自服务端真实路由。若 Agent 宿主只显示旧工具，可用 send_input 的 action=takeover / release 控制原终端；控制操作必须使用空 data，不发送按键。</Text>
+                  </VStack>
                   <Text type="supporting" color="secondary">首次连接服务器仍需确认主机指纹。</Text>
                 </VStack>}
               </>}

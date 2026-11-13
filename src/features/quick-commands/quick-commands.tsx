@@ -75,7 +75,7 @@ export function QuickCommandRows({commands, manager = false, canSend = false, bu
   return <Table className="quick-table" data={rows} columns={columns} idKey="id" density="compact" dividers="rows" textOverflow="truncate" hasHover aria-label="快捷指令列表" />;
 }
 
-export function QuickCommandPanel({onLocateTerminal}: {onLocateTerminal?: (id: string) => void} = {}) {
+export function QuickCommandPanel({onLocateTerminal, readOnly = false}: {onLocateTerminal?: (id: string) => void; readOnly?: boolean} = {}) {
   const query = useQuickCommands();
   const {sessions, activeId, getRuntime} = useSessions();
   const navigate = useNavigate();
@@ -88,11 +88,12 @@ export function QuickCommandPanel({onLocateTerminal}: {onLocateTerminal?: (id: s
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
   const active = sessions.find(session => session.id === activeId);
-  const canSend = isDesktop && active?.status === 'connected';
+  const canSend = !readOnly && isDesktop && active?.status === 'connected';
   const activeGroup = commandGroups(query.data).includes(group) ? group : '';
   const commands = filterCommands(query.data?.commands ?? [], activeGroup, search);
   const send = async (command: QuickCommand) => {
     if (sending.current) return;
+    if (readOnly) { setError('当前工作区仅供查看，请先切换到人工终端。'); return; }
     const target = active;
     const runtime = target ? getRuntime(target.id) : undefined;
     setError(''); setFeedback('');
@@ -107,12 +108,12 @@ export function QuickCommandPanel({onLocateTerminal}: {onLocateTerminal?: (id: s
   };
   return <VStack className="quick-panel" height="100%" gap={0}>
     <HStack className="feature-toolbar quick-toolbar" vAlign="center" gap={2} wrap="wrap">
-      <Terminal size="1em" /><Text className="quick-target" maxLines={1} hasTruncateTooltip>当前终端：{active ? `${active.profile.name} · ${active.profile.username}@${active.profile.hostname.includes(':') ? `[${active.profile.hostname}]` : active.profile.hostname}:${active.profile.port}` : '未连接'}</Text>
+      <Terminal size="1em" /><Text className="quick-target" maxLines={1} hasTruncateTooltip>当前终端：{readOnly ? '当前页面仅供查看' : active ? `${active.profile.name} · ${active.profile.username}@${active.profile.hostname.includes(':') ? `[${active.profile.hostname}]` : active.profile.hostname}:${active.profile.port}` : '未连接'}</Text>
       <StackItem size="fill" /><TextInput label="搜索快捷指令" isLabelHidden type="search" value={search} onChange={setSearch} placeholder="搜索指令…" hasClear startIcon={<Search size="1em" />} controlClassName="feature-search-control" />
       <Button label="管理指令" size="sm" icon={<Settings2 size="1em" />} variant="ghost" href="/commands" />
       <Button label="新建" size="sm" icon={<Plus size="1em" />} href="/commands/new?return=workbench" />
     </HStack>
-    {!canSend && <Text className="feature-note" color="secondary">{active?.status === 'connecting' || active?.status === 'hostKey' ? '正在认证，暂不可发送。连接成功后即可使用。' : '当前没有已连接终端，连接后即可发送快捷指令。'}</Text>}
+    {!canSend && <Text className="feature-note" color="secondary">{readOnly ? '当前工作区仅供查看，请切换到人工终端后发送快捷指令。' : active?.status === 'connecting' || active?.status === 'hostKey' ? '正在认证，暂不可发送。连接成功后即可使用。' : '当前没有已连接终端，连接后即可发送快捷指令。'}</Text>}
     {feedback && <Banner className="compact-feedback" status="success" title={feedback} isDismissable onDismiss={() => setFeedback('')} />}
     {error && <Banner className="compact-feedback" status="error" title="指令未发送" description={error} isDismissable onDismiss={() => setError('')} />}
     {query.error && <Banner className="compact-feedback" status="error" title="无法读取快捷指令" description={errorMessage(query.error)} endContent={<Button label="重试" size="sm" onClick={() => { void query.refetch(); }} />} />}

@@ -6,7 +6,7 @@ import {IconButton} from '@astryxdesign/core/IconButton';
 import {DropdownMenu} from '@astryxdesign/core/DropdownMenu';
 import type {DropdownMenuOption} from '@astryxdesign/core/DropdownMenu';
 import {StatusDot} from '@astryxdesign/core/StatusDot';
-import {Minus, Square, X, Server, Folder, Code2, Clock3, Network, Settings, Search, Columns2, RefreshCw} from 'lucide-react';
+import {Minus, Square, X, Server, Folder, Code2, Clock3, History, Bot, Network, Settings, Search, Columns2, RefreshCw} from 'lucide-react';
 import type {ShellSession} from '../terminal/runtime';
 import {statusLabel} from './status';
 import orbitAppIcon from '../../../src-tauri/icons/icon.png';
@@ -34,8 +34,8 @@ export function IdeTitlebar({menus, onWindow}: {menus: IdeMenu[]; onWindow: (act
   </HStack>;
 }
 
-export function ActivityRail({showServers, showFiles, toolTab, toolsOpen, onServers, onFiles, onSessions, onTool, onSettings}: {
-  showServers: boolean; showFiles: boolean; toolTab: ToolTab; toolsOpen: boolean;
+export function ActivityRail({showServers, showFiles, toolTab, toolsOpen, onServers, onFiles, onSessions, onTool, onSettings, historyActive = false, onHistory}: {
+  showServers: boolean; showFiles: boolean; toolTab: ToolTab; toolsOpen: boolean; historyActive?: boolean; onHistory?: () => void;
   onServers: () => void; onFiles: () => void; onSessions: () => void; onTool: (tab: ToolTab) => void; onSettings: () => void;
 }) {
   return <VStack className="activity-rail" gap={0} height="100%">
@@ -44,20 +44,22 @@ export function ActivityRail({showServers, showFiles, toolTab, toolsOpen, onServ
     <IconButton label="打开会话" tooltip="打开会话" className="activity-action" icon={<Code2 aria-hidden />} variant="ghost" onClick={onSessions} />
     <IconButton label="连接日志" tooltip="连接日志" className="activity-action" icon={<Clock3 aria-hidden />} data-active={String(toolsOpen && toolTab === 'logs')} aria-pressed={toolsOpen && toolTab === 'logs'} variant="ghost" onClick={() => onTool('logs')} />
     <IconButton label="AI 工具" tooltip="AI 工具 · MCP" className="activity-action" icon={<Network aria-hidden />} data-active={String(toolsOpen && toolTab === 'ai')} aria-pressed={toolsOpen && toolTab === 'ai'} variant="ghost" onClick={() => onTool('ai')} />
+    <IconButton label="执行历史" tooltip="执行历史 · 本机命令记录" className="activity-action" icon={<History aria-hidden />} data-active={String(historyActive)} aria-pressed={historyActive} isDisabled={!onHistory} variant="ghost" onClick={() => onHistory?.()} />
     <StackItem size="fill" />
     <IconButton label="设置" tooltip="设置" className="activity-action activity-settings" icon={<Settings aria-hidden />} variant="ghost" onClick={onSettings} />
   </VStack>;
 }
 
-export function SessionContextBar({session, onSearch, onReconnect, onFiles}: {session: ShellSession; onSearch: () => void; onReconnect: () => void; onFiles: () => void}) {
+export function SessionContextBar({session, onSearch, onReconnect, onFiles, aiControlled = false, onTakeOverAi}: {session: ShellSession; onSearch: () => void; onReconnect: () => void; onFiles: () => void; aiControlled?: boolean; onTakeOverAi?: (id: string) => void}) {
   return <HStack className="session-info" vAlign="center" gap={2}>
     <Text className="context-breadcrumb" maxLines={1}>{session.profile.group} / {session.profile.name}</Text>
     <Text className="context-separator" color="secondary">·</Text>
     <Text className="session-address" color="secondary" maxLines={1}>{session.profile.username.startsWith('b64>>') ? '堡垒机会话' : session.profile.username}@{session.profile.hostname}:{session.profile.port}</Text>
     <StackItem size="fill" />
+    {!aiControlled && onTakeOverAi && <Button className="takeover-action" label="交给 AI 接管" icon={<Bot size="1em" />} variant="ghost" size="sm" isDisabled={session.status !== 'connected'} onClick={() => onTakeOverAi?.(session.id)} />}
     <IconButton className="context-action" label="查找终端" tooltip="查找终端 · Ctrl + F" size="sm" variant="ghost" icon={<Search />} onClick={onSearch} />
     <IconButton className="context-action" label="显示或隐藏远程文件" tooltip="远程文件" size="sm" variant="ghost" icon={<Columns2 />} onClick={onFiles} />
-    <IconButton className="context-action" label="重新连接" tooltip="重新连接" size="sm" variant="ghost" icon={<RefreshCw />} isDisabled={session.status === 'connecting' || session.status === 'hostKey'} onClick={onReconnect} />
+    <IconButton className="context-action" label="重新连接" tooltip="重新连接" size="sm" variant="ghost" icon={<RefreshCw />} isDisabled={aiControlled || session.status === 'connecting' || session.status === 'hostKey'} onClick={onReconnect} />
   </HStack>;
 }
 

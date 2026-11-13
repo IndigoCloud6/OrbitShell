@@ -103,7 +103,7 @@ function ConnectionEditor({profile}: {profile: ConnectionProfile | null}) {
   return <Dialog isOpen className="orbit-dialog connection-editor" data-density={uiDensity} purpose={busy ? 'required' : 'form'}
     width="calc(var(--orbit-unit) * 54)" maxHeight="calc(100dvh - var(--orbit-unit) * 6)" padding={0}
     onOpenChange={open => { if (!open && !busy) void navigate('/'); }}>
-    <VStack className="orbit-dialog-layout" gap={0} as="form" onSubmit={(event: FormEvent) => { event.preventDefault(); void submit(false); }}>
+    <VStack className="orbit-dialog-layout connection-editor-layout" gap={0} as="form" onSubmit={(event: FormEvent) => { event.preventDefault(); void submit(false); }}>
       <DialogHeader className="orbit-dialog-header" title={profile ? '编辑连接' : '新建 SSH 连接'} hasDivider onOpenChange={open => { if (!open && !busy) void navigate('/'); }} />
       <VStack className="orbit-dialog-body" gap={4}>
       {error && <Banner status="error" title="保存未完成" description={error} />}
@@ -186,6 +186,8 @@ export function CredentialsDialog({profile, onClose, ephemeral = false}: {profil
   const credentialLabel = profile.authMethod === 'privateKey' ? '私钥口令' : '登录密码';
   const useSaved = !ephemeral && Boolean(savedCredential.data?.saved) && !replaceSaved && !credential;
   const reading = isDesktop && !ephemeral && savedCredential.isPending;
+  const hostAddress = `${profile.hostname.includes(':') && !profile.hostname.startsWith('[') ? `[${profile.hostname}]` : profile.hostname}:${profile.port}`;
+  const displayUsername = username.startsWith('b64>>') ? '堡垒机会话' : username;
 
   async function clearSaved() {
     if (busy) return;
@@ -224,7 +226,7 @@ export function CredentialsDialog({profile, onClose, ephemeral = false}: {profil
     </HStack> : null;
 
   return <Dialog isOpen className="orbit-dialog connection-login" data-density={uiDensity} purpose={busy ? 'required' : 'form'} padding={0}
-    width="calc(var(--orbit-unit) * 54)" maxHeight="calc(100dvh - var(--orbit-unit) * 6)"
+    width="calc(var(--orbit-unit) * 41.6)" maxHeight="calc(100dvh - var(--orbit-unit) * 6)"
     onOpenChange={open => { if (!open && !busy) onClose(); }}>
     <VStack className="connection-login-layout" gap={0} as="form" onSubmit={connect}>
       <DialogHeader className="connection-login-header" title="连接服务器" hasDivider onOpenChange={open => { if (!open && !busy) onClose(); }} />
@@ -234,38 +236,30 @@ export function CredentialsDialog({profile, onClose, ephemeral = false}: {profil
           <VStack className="connection-login-target" gap={0.5}>
             <Text className="connection-login-name" maxLines={1}>{profile.name}</Text>
             <Text className="connection-login-address" color="secondary" maxLines={1}>
-              {profile.hostname.includes(':') && !profile.hostname.startsWith('[') ? `[${profile.hostname}]:${profile.port}` : `${profile.hostname}:${profile.port}`}
+              {displayUsername ? `${displayUsername}@${hostAddress}` : hostAddress}
             </Text>
           </VStack>
           <Text className="connection-login-group" color="secondary" maxLines={1}>{profile.group}</Text>
         </HStack>
-        <HStack className="connection-login-details" gap={4} vAlign="start">
-          <VStack className="connection-login-detail" gap={1}>
-            <Text className="connection-login-label" color="secondary">用户名</Text>
-            {profile.username ? <Text className="connection-login-value" maxLines={1}>{profile.username}</Text> :
-              <TextInput label="用户名" isLabelHidden value={username} onChange={setUsername} isRequired isDisabled={busy} hasAutoFocus
-                width="100%" controlClassName="connection-login-input" />}
-          </VStack>
-          <VStack className="connection-login-detail" gap={1}>
-            <Text className="connection-login-label" color="secondary">认证方式</Text>
-            <Text className="connection-login-value">{profile.authMethod === 'privateKey' ? 'SSH 私钥' : '密码'}</Text>
-          </VStack>
-        </HStack>
-        <VStack className="connection-login-authentication" gap={3}>
+        {!profile.username && <VStack className="connection-login-username" gap={0}>
+          <TextInput label="用户名" value={username} onChange={setUsername} isRequired isDisabled={busy} hasAutoFocus
+            width="100%" controlClassName="connection-login-input" />
+        </VStack>}
+        <VStack className="connection-login-authentication" gap={2}>
           {error && <Banner status="error" title="暂时无法连接" description={error} />}
           {!isDesktop && <Banner status="info" title="当前为浏览器预览" description="请启动 OrbitShell 桌面端连接服务器。" />}
           {!ephemeral && savedCredential.error && <Banner status="warning" title="无法读取已保存凭据" description="可手动输入本次密码，或清除旧凭据后重试。"
             endContent={<Button label="重试" size="sm" isDisabled={busy} onClick={() => { void savedCredential.refetch(); }} />} />}
           {reading ? <HStack className="connection-login-reading" gap={2} vAlign="center" role="status">
             <LoaderCircle className="spinning" aria-hidden /><Text color="secondary">正在读取已保存凭据状态…</Text>
-          </HStack> : useSaved ? <HStack className="connection-login-credential-strip" gap={3} vAlign="center">
-            <HStack className="connection-login-credential-mark" vAlign="center"><KeyRound aria-hidden /></HStack>
-            <VStack className="connection-login-credential-copy" gap={0.5}>
-              <Text className="connection-login-credential-title">已保存{credentialLabel}</Text>
-              <Text className="connection-login-credential-description" color="secondary">连接时使用本机保存的凭据</Text>
-            </VStack>
-            {credentialActions}
-          </HStack> : <VStack className="connection-login-manual" gap={3}>
+          </HStack> : useSaved ? <VStack className="connection-login-saved" gap={2}>
+            <HStack className="connection-login-credential-strip" gap={2} vAlign="center">
+              <KeyRound className="connection-login-credential-mark" aria-hidden />
+              <Text className="connection-login-credential-title" maxLines={1}>使用已保存的{profile.authMethod === 'privateKey' ? '私钥口令' : '密码'}</Text>
+              {credentialActions}
+            </HStack>
+            <Text className="connection-login-local-note" color="secondary">凭据仅保存在本机</Text>
+          </VStack> : <VStack className="connection-login-manual" gap={2}>
             <TextInput label={credentialLabel} type="password" value={credential} onChange={setCredential}
               autoComplete="off" hasAutoFocus={Boolean(profile.username)} isDisabled={busy} isOptional={profile.authMethod === 'privateKey'}
               width="100%" controlClassName="connection-login-input"
@@ -277,8 +271,8 @@ export function CredentialsDialog({profile, onClose, ephemeral = false}: {profil
         </VStack>
       </VStack>
       <HStack className="connection-login-footer" gap={2} hAlign="end">
-        <Button label="取消" onClick={onClose} isDisabled={busy} />
-        <Button label="连接服务器" icon={<Plug size="1em" />} type="submit" variant="primary" isDisabled={!isDesktop || reading || busy} />
+        <Button label="取消" size="sm" onClick={onClose} isDisabled={busy} />
+        <Button label="连接服务器" size="sm" icon={<Plug size="1em" />} type="submit" variant="primary" isDisabled={!isDesktop || reading || busy} />
       </HStack>
     </VStack>
   </Dialog>;

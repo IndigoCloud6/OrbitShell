@@ -2,6 +2,7 @@ import {Channel} from '@tauri-apps/api/core';
 import type {Terminal} from '@xterm/xterm';
 import {desktopCommand, errorMessage, isDesktop} from '../../shared/desktop';
 import type {ConnectionProfile} from '../connections/types';
+import {CommandCapture} from './command-capture';
 
 export type SessionStatus = 'connecting' | 'hostKey' | 'connected' | 'closed' | 'error';
 export interface HostKey {hostname: string; port: number; fingerprint: string; algorithm: string}
@@ -43,9 +44,11 @@ export class TerminalRuntime {
   private ackBytes = 0;
   private ackTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly events: Channel<SessionEvent> | null;
+  private readonly capture: CommandCapture;
 
   constructor(id: string, private readonly update: (patch: Partial<ShellSession>) => void) {
     this.id = id;
+    this.capture = new CommandCapture(id, () => this.update({message: '命令已发送，但本地执行历史记录失败'}));
     this.events = isDesktop ? new Channel<SessionEvent>() : null;
     if (this.events) this.events.onmessage = event => this.receive(event);
   }
@@ -94,8 +97,9 @@ export class TerminalRuntime {
 
   attach(writer: Writer) {
     this.writer = writer;
+    const lineFeed = this.terminal?.onLineFeed(() => { if (this.terminal) this.capture.lineFeed(this.terminal); });
     for (const bytes of this.pending.splice(0)) this.write(bytes);
-    return () => { this.writer = null; };
+    return () => { lineFeed?.dispose(); this.capture.reset(); this.writer = null; };
   }
 
   private write(bytes: Uint8Array) {
@@ -113,22 +117,31 @@ export class TerminalRuntime {
 
   input(data: string | Uint8Array) {
     if (!this.connected || this.disposed) return;
-    void this.queueInput(data).catch(error => this.receive({type: 'error', message: errorMessage(error)}));
+    this.capture.input(data, this.terminal);
+    void this.queueInput(data).catch(error => {
+      this.capture.reset();
+      const message = errorMessage(error);
+      if (message.includes('AI_SESSION_OWNED')) this.update({message: '当前终端由 AI 接管，请先交回人工'});
+      else this.receive({type: 'error', message});
+    });
   }
 
   async sendCommand(command: string, appendNewline: boolean) {
     if (!this.connected || this.disposed) throw new Error('当前终端尚未连接，指令未发送');
     const data = command.replace(/\r\n|\n/g, '\r');
-    await this.queueInput(appendNewline ? `${data.replace(/\r+$/, '')}\r` : data);
+    await this.queueInput(appendNewline ? `${data.replace(/\r+$/, '')}\r` : data, appendNewline ? command : undefined);
   }
 
-  private queueInput(data: string | Uint8Array): Promise<void> {
+  private queueInput(data: string | Uint8Array, submittedCommand?: string): Promise<void> {
     const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+    const historyId = submittedCommand ? crypto.randomUUID() : null;
     // Keep each paste/shortcut ordered and bound to this runtime, even after tab switches.
     const queued = this.inputQueue.then(async () => {
       for (let offset = 0; offset < bytes.length; offset += 32 * 1024) {
         if (this.disposed || !this.connected) throw new Error('终端已断开，剩余输入未发送');
-        await desktopCommand('ssh_write', {sessionId: this.id, data: Array.from(bytes.subarray(offset, offset + 32 * 1024))});
+        const last = offset + 32 * 1024 >= bytes.length;
+        await desktopCommand('ssh_write', {sessionId: this.id, data: Array.from(bytes.subarray(offset, offset + 32 * 1024)),
+          historyCommand: last ? submittedCommand ?? null : null, historyId: last ? historyId : null});
       }
     });
     this.inputQueue = queued.catch(() => {});

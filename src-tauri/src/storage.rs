@@ -50,11 +50,15 @@ pub struct Store {
     #[serde(default)]
     pub mcp_token: String,
     #[serde(default)]
+    pub mcp_auto_start: bool,
+    #[serde(default)]
     pub quick_commands: Vec<crate::quick_commands::QuickCommand>,
     #[serde(default)]
     pub quick_command_groups: Vec<String>,
     #[serde(default)]
     pub desktop: crate::desktop::DesktopPreferences,
+    #[serde(default)]
+    pub recent_connections: Vec<crate::recent::RecentStamp>,
 }
 
 pub struct Storage {

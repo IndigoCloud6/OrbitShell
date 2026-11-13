@@ -18,8 +18,9 @@ import type {ShellSession, TerminalRuntime} from './runtime';
 import {MenuShortcut, openContextMenuFromKeyboard, useCopyText} from '../../shared/context-menu';
 
 interface Props {
-  session: ShellSession;
-  runtime: TerminalRuntime;
+  session: Pick<ShellSession, 'id' | 'status'> & {profile: Pick<ShellSession['profile'], 'name'>};
+  runtime: Pick<TerminalRuntime, 'terminal' | 'attach' | 'input' | 'resize'>;
+  readOnly?: boolean;
   active: boolean;
   fontSize: number;
   searchOpen: boolean;
@@ -29,7 +30,7 @@ interface Props {
   onSaveSelection?: (text: string) => void;
 }
 
-export function TerminalPane({session, runtime, active, fontSize, searchOpen, searchRequest, onCloseSearch, onOpenSearch, onSaveSelection}: Props) {
+export function TerminalPane({session, runtime, active, readOnly = false, fontSize, searchOpen, searchRequest, onCloseSearch, onOpenSearch, onSaveSelection}: Props) {
   const host = useRef<HTMLElement | null>(null);
   const searchInput = useRef<HTMLInputElement | null>(null);
   const fit = useRef<FitAddon | null>(null);
@@ -118,8 +119,8 @@ export function TerminalPane({session, runtime, active, fontSize, searchOpen, se
   }, [runtime, setFontSize]);
 
   useEffect(() => {
-    if (runtime.terminal) runtime.terminal.options.disableStdin = session.status !== 'connected';
-  }, [runtime, session.status]);
+    if (runtime.terminal) runtime.terminal.options.disableStdin = readOnly || session.status !== 'connected';
+  }, [runtime, session.status, readOnly]);
 
   useEffect(() => {
     if (!active) return;
@@ -218,7 +219,7 @@ export function TerminalPane({session, runtime, active, fontSize, searchOpen, se
       items={[
         {label: '复制选中文本', icon: <Copy />, endContent: <MenuShortcut>Ctrl + C</MenuShortcut>, isDisabled: !hasSelection,
           onClick: () => { const text = contextSelection.current?.text; if (text) void copy(text); }},
-        {label: '粘贴到终端', icon: <ClipboardPaste />, endContent: <MenuShortcut>Ctrl + V</MenuShortcut>, isDisabled: session.status !== 'connected', onClick: paste},
+        {label: '粘贴到终端', icon: <ClipboardPaste />, endContent: <MenuShortcut>Ctrl + V</MenuShortcut>, isDisabled: readOnly || session.status !== 'connected', onClick: paste},
         {label: '全选终端内容', icon: <TextSelect />, onClick: () => contextSelection.current?.terminal.selectAll()},
         {type: 'divider'},
         {label: '查找选中文本', icon: <Search />, isDisabled: !hasSelection || !onOpenSearch, onClick: () => {

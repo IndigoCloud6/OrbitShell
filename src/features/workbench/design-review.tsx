@@ -1,6 +1,6 @@
 // Development-only visual fixture. Never loads saved connections or credentials.
 import {useEffect, useRef, useState} from 'react';
-import {useNavigate} from 'react-router';
+import {useNavigate, useSearchParams} from 'react-router';
 import {useResizable} from '@astryxdesign/core/Resizable';
 import {VStack, HStack, StackItem} from '@astryxdesign/core/Stack';
 import {IdeLayout} from './ide-layout';
@@ -17,6 +17,8 @@ import type {RemoteEntry} from '../files/file-utils';
 import type {Transfer} from '../files/transfer-provider';
 import {WorkspaceTools} from './workspace-tools';
 import {DesignReviewCommands, DesignReviewEditor, DesignReviewExecutions} from './design-review-extras';
+import {StartPageView} from './start-page';
+import type {RecentConnection} from '../connections/recent';
 
 const profiles: ConnectionProfile[] = [
   ['api-prod-01', '生产环境', '192.0.2.24'], ['db-primary', '生产环境', '192.0.2.25'],
@@ -25,6 +27,12 @@ const profiles: ConnectionProfile[] = [
 ].map(([name = '', group = '', hostname = ''], index) => ({id: `design-profile-${index}`, name, group, hostname, port: 22, username: 'deploy', authMethod: 'password', privateKeyPath: null}));
 const initialSessions: ShellSession[] = [profiles[0]!, profiles[1]!, profiles[4]!].map(profile => ({
   id: profile.id, profile, status: 'connected', message: '已连接', hostKey: null, columns: 120, rows: 36,
+}));
+const recentSessions: RecentConnection[] = profiles.slice(0, 4).map((profile, index) => ({
+  id: `review-recent-${index}`, profileId: index === 3 ? null : profile.id, sessionId: null,
+  name: index === 3 ? '堡垒机临时会话' : profile.name, group: index === 3 ? '临时连接' : profile.group,
+  hostname: profile.hostname, port: profile.port, username: index === 3 ? '' : profile.username,
+  lastUsedAt: Date.now() - index * 300_000, temporary: index === 3, requiresNewLink: index === 3,
 }));
 const entries: RemoteEntry[] = [
   ...['config', 'logs', 'migrations', 'src', 'static'].map(name => ({name, path: `/srv/orbit-api/${name}`, isDirectory: true, isSymlink: false, size: 0})),
@@ -56,10 +64,15 @@ const terminalText = [
 
 export default function DesignReview() {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const startReview = params.get('view') === 'start';
+  const [startInput, setStartInput] = useState('');
+  const [startNotice, setStartNotice] = useState('');
+  const startInputRef = useRef<HTMLInputElement | null>(null);
   const [search, setSearch] = useState('');
   const [sessions, setSessions] = useState(initialSessions);
   const [activeId, setActive] = useState(initialSessions[0]!.id);
-  const active = sessions.find(session => session.id === activeId) ?? sessions[0] ?? null;
+  const active = startReview ? null : sessions.find(session => session.id === activeId) ?? sessions[0] ?? null;
   const [files, setFiles] = useState(true);
   const [servers, setServers] = useState(true);
   const [tools, setTools] = useState(true);
@@ -84,26 +97,29 @@ export default function DesignReview() {
   }, []);
   const openTool = (value: ToolTab) => { setTab(value); setTools(true); };
   return <IdeLayout titlebar={<IdeTitlebar menus={['文件', '编辑', '视图', '会话', '帮助'].map(label => ({label, items: [{label: '返回工作台', onClick: () => { void navigate('/'); }}]}))} onWindow={() => {}} />}
-    activity={<ActivityRail showServers={servers} showFiles={files} toolTab={tab} toolsOpen={tools} onServers={() => setServers(!servers)} onFiles={() => setFiles(!files)}
+    activity={<ActivityRail showServers={servers} showFiles={files && !startReview} toolTab={tab} toolsOpen={tools} onServers={() => setServers(!servers)} onFiles={() => setFiles(!files)}
       onSessions={() => { void navigate('/connections'); }} onTool={openTool} onSettings={() => { void navigate('/settings'); }} />}
-    sidebar={<ConnectionExplorer profiles={profiles} sessions={initialSessions} activeId={active?.id ?? null} search={search} onSearch={setSearch}
+    sidebar={<ConnectionExplorer profiles={profiles} sessions={startReview ? [] : sessions} activeId={active?.id ?? null} search={search} onSearch={setSearch}
       onOpen={profile => { const session = sessions.find(row => row.profile.id === profile.id); if (session) { setActive(session.id); setEditorOpen(false); } }}
       onCreate={() => { void navigate('/connections/new'); }} onManage={() => { void navigate('/connections'); }} />}
     files={<FileBrowserView connected entries={entries} path={path} selectedPath={selected} compact={compact} showHidden={hidden}
       onPath={setPath} onNavigate={setPath} onRefresh={() => {}} onHidden={() => setHidden(!hidden)} onDensity={() => setCompact(!compact)}
       onUpload={() => {}} onDownload={() => {}} onSelect={entry => setSelected(entry.path)} onEdit={() => setEditorOpen(true)} onCollapse={() => setFiles(false)} />}
     footer={<IdeStatusbar active={active} mcpEnabled={false} />}
-    showServers={servers} showFiles={files} serverWidth={left.size} filesWidth={right.size} serverResize={left.props} filesResize={right.props}>
+    showServers={servers} showFiles={files && !startReview} serverWidth={left.size} filesWidth={right.size} serverResize={left.props} filesResize={right.props}>
     <VStack className="workspace-stack" height="100%" gap={0}>
-      <HStack className="session-tabs" gap={0} vAlign="center"><StackItem className="session-strip-container" size="fill"><SessionTabs sessions={sessions} activeId={active?.id ?? null} onSelect={id => { setActive(id); setEditorOpen(false); }} onClose={id => setSessions(previous => previous.filter(row => row.id !== id))} onCreate={() => { void navigate('/connections'); }}
-        editors={[{id: 'review-editor', name: 'README.md', path: '/srv/orbit-api/README.md', sessionName: 'api-prod-01', dirty: true, saving: false, canSave: false}]} activeEditorId={editorOpen ? 'review-editor' : null}
+      <HStack className="session-tabs" gap={0} vAlign="center"><StackItem className="session-strip-container" size="fill"><SessionTabs sessions={startReview ? [] : sessions} activeId={active?.id ?? null} onSelect={id => { setActive(id); setEditorOpen(false); }} onClose={id => setSessions(previous => previous.filter(row => row.id !== id))} onCreate={() => { void navigate('/connections'); }}
+        editors={startReview ? [] : [{id: 'review-editor', name: 'README.md', path: '/srv/orbit-api/README.md', sessionName: 'api-prod-01', dirty: true, saving: false, canSave: false}]} activeEditorId={!startReview && editorOpen ? 'review-editor' : null}
         onSelectEditor={() => setEditorOpen(true)} onCloseEditor={() => setEditorOpen(false)} /></StackItem></HStack>
       {!editorOpen && active && <SessionContextBar session={active} onSearch={() => setFind(true)} onReconnect={() => {}} onFiles={() => setFiles(!files)} />}
       <StackItem size="fill" className="terminal-area">
+        {startReview && <StartPageView records={recentSessions} pending={false} historyError="" busy={false} input={startInput} error={startNotice}
+          canConnect inputRef={startInputRef} onInput={setStartInput} onConnect={() => { setStartInput(''); setStartNotice('隔离设计比对，不会建立真实连接。'); }}
+          onRecent={() => setStartNotice('隔离设计比对，不会建立真实连接。')} onRetry={() => {}} onDismissError={() => setStartNotice('')} />}
         {active && runtime.current && <TerminalPane session={active} runtime={runtime.current} active={!editorOpen} fontSize={17} searchOpen={find} searchRequest={0} onCloseSearch={() => setFind(false)} />}
-        <DesignReviewEditor active={editorOpen} />
+        {!startReview && <DesignReviewEditor active={editorOpen} />}
       </StackItem>
-      <WorkspaceTools transfers={transfers} logs={[]} tab={tab} open={tools} onTab={openTool} onToggle={() => setTools(!tools)} onClear={() => setTransfers(previous => previous.filter(row => row.status === 'running'))}
+      <WorkspaceTools transfers={startReview ? [] : transfers} logs={[]} tab={tab} open={tools} onTab={openTool} onToggle={() => setTools(!tools)} onClear={() => setTransfers(previous => previous.filter(row => row.status === 'running'))}
         ai={<DesignReviewExecutions />} commands={<DesignReviewCommands />} />
     </VStack>
   </IdeLayout>;

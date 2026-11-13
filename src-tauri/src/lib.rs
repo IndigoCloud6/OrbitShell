@@ -4,15 +4,18 @@ mod credentials;
 mod launch;
 mod mcp;
 mod executions;
+mod ai_terminals;
 mod quick_commands;
 mod remote_editor;
 mod desktop;
+mod recent;
+mod command_history;
 
 use anyhow::{anyhow, Context};
 use russh_sftp::protocol::OpenFlags;
 use serde::Serialize;
 use ssh::{ConnectRequest, LiveSession, SessionCommand, SessionEvent, SessionEvents, OutputBuffer};
-use std::{collections::HashMap, sync::{Arc, Mutex, atomic::AtomicBool}, time::Duration};
+use std::{collections::HashMap, sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64}}, time::Duration};
 use storage::{ConnectionProfile, Storage};
 use tauri::{ipc::Channel, AppHandle, Manager, State};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, sync::{mpsc, OnceCell}, time::timeout};
@@ -23,10 +26,15 @@ pub struct AppState {
     sessions: Mutex<HashMap<String, Arc<LiveSession>>>,
     launches: Mutex<Vec<launch::PendingLaunch>>,
     mcp_enabled: AtomicBool,
+    mcp_epoch: AtomicU64,
     mcp_runtime: tokio::sync::Mutex<Option<mcp::RunningMcp>>,
+    mcp_startup_error: Mutex<Option<String>>,
+    history: command_history::History,
     executions: executions::ExecutionStore,
+    ai: ai_terminals::AiTerminals,
     editor: remote_editor::EditorStore,
     desktop: desktop::DesktopState,
+    recent: recent::RecentState,
 }
 
 impl AppState {
@@ -42,13 +50,14 @@ fn list_connections(state: State<'_, AppState>) -> Result<Vec<ConnectionProfile>
 }
 
 #[tauri::command]
-fn save_connection(mut profile: ConnectionProfile, state: State<'_, AppState>) -> Result<ConnectionProfile, String> {
+fn save_connection(mut profile: ConnectionProfile, state: State<'_, AppState>, app: AppHandle) -> Result<ConnectionProfile, String> {
     profile.validate()?;
     let mut store = state.storage.store.lock().map_err(|_| "配置暂不可用")?;
-    if let Some(existing) = store.connections.iter().find(|entry| entry.id == profile.id) {
-        if !credentials::same_identity(existing, &profile) { credentials::forget(&profile.id)?; }
-    }
+    let identity_changed = store.connections.iter().find(|entry| entry.id == profile.id)
+        .is_some_and(|existing| !credentials::same_identity(existing, &profile));
+    if identity_changed { credentials::forget(&profile.id)?; }
     let mut next = store.clone();
+    if identity_changed { next.recent_connections.retain(|stamp| stamp.profile_id != profile.id); }
     if let Some(existing) = next.connections.iter_mut().find(|entry| entry.id == profile.id) {
         *existing = profile.clone();
     } else {
@@ -56,17 +65,24 @@ fn save_connection(mut profile: ConnectionProfile, state: State<'_, AppState>) -
     }
     state.storage.persist(&next).map_err(|error| format!("保存失败：{error}"))?;
     *store = next;
+    if identity_changed { recent::forget_profile(&state, &profile.id); }
+    drop(store);
+    recent::notify(&app);
     Ok(profile)
 }
 
 #[tauri::command]
-fn delete_connection(id: String, state: State<'_, AppState>) -> Result<(), String> {
+fn delete_connection(id: String, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     let mut store = state.storage.store.lock().map_err(|_| "配置暂不可用")?;
     credentials::forget(&id)?;
     let mut next = store.clone();
     next.connections.retain(|profile| profile.id != id);
+    next.recent_connections.retain(|stamp| stamp.profile_id != id);
     state.storage.persist(&next).map_err(|error| format!("保存失败：{error}"))?;
     *store = next;
+    recent::forget_profile(&state, &id);
+    drop(store);
+    recent::notify(&app);
     Ok(())
 }
 
@@ -153,9 +169,14 @@ pub(crate) fn start_session(app: AppHandle, mut request: ConnectRequest, events:
 }
 
 #[tauri::command]
-async fn ssh_write(session_id: String, data: Vec<u8>, state: State<'_, AppState>) -> Result<(), String> {
+async fn ssh_write(session_id: String, data: Vec<u8>, history_command: Option<String>, history_id: Option<String>, state: State<'_, AppState>) -> Result<(), String> {
     if data.len() > 1024 * 1024 { return Err("单次输入内容过大，请分批粘贴".into()); }
-    state.session(&session_id)?.commands.send(SessionCommand::Input(data)).await.map_err(|_| "连接已关闭".into())
+    if state.ai.taken_over(&session_id) { return Err("AI_SESSION_OWNED: 当前终端由 AI 接管，请先交回人工".into()); }
+    let history = match (history_id, history_command) {
+        (Some(id), Some(command)) if command.len() <= 64 * 1024 && uuid::Uuid::parse_str(&id).is_ok() => Some((id, command)),
+        _ => None,
+    };
+    state.session(&session_id)?.commands.send(SessionCommand::Input { data, history }).await.map_err(|_| "连接已关闭".into())
 }
 
 #[tauri::command]
@@ -307,6 +328,8 @@ pub fn run() {
         })
         .setup(|app| {
             let storage = Storage::open(app.path().app_data_dir()?)?;
+            let history = command_history::History::open(app.path().app_data_dir()?);
+            let mcp_auto_start = storage.store.lock().map_err(|_| anyhow!("配置暂不可用"))?.mcp_auto_start;
             let close_to_tray = {
                 let mut store = storage.store.lock().map_err(|_| anyhow!("配置暂不可用"))?;
                 if store.mcp_token.is_empty() {
@@ -316,7 +339,18 @@ pub fn run() {
                 store.desktop.close_to_tray
             };
             app.manage(AppState { storage, sessions: Mutex::new(HashMap::new()), launches: Mutex::new(Vec::new()),
-                mcp_enabled: AtomicBool::new(false), mcp_runtime: tokio::sync::Mutex::new(None), executions: executions::ExecutionStore::default(), editor: remote_editor::EditorStore::default(), desktop: desktop::DesktopState::new(close_to_tray) });
+                mcp_enabled: AtomicBool::new(false), mcp_epoch: AtomicU64::new(0), mcp_runtime: tokio::sync::Mutex::new(None), mcp_startup_error: Mutex::new(None), history, executions: executions::ExecutionStore::default(), ai: ai_terminals::AiTerminals::default(), editor: remote_editor::EditorStore::default(), desktop: desktop::DesktopState::new(close_to_tray), recent: recent::RecentState::default() });
+            if mcp_auto_start {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let epoch = handle.state::<AppState>().mcp_epoch.load(std::sync::atomic::Ordering::Acquire);
+                    if let Err(error) = mcp::mcp_set_enabled(true, handle.clone()).await {
+                        let state = handle.state::<AppState>();
+                        if let Ok(mut status) = state.mcp_startup_error.lock() { if state.mcp_epoch.load(std::sync::atomic::Ordering::Acquire) == epoch.wrapping_add(1) { *status = Some(error); } }
+                        mcp::notify_status(&handle);
+                    }
+                });
+            }
             desktop::install(app.handle());
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             launch::ingest_arguments(app.handle(), std::env::args().skip(1).collect());
@@ -360,8 +394,14 @@ pub fn run() {
             desktop::desktop_request_exit, desktop::desktop_confirm_exit, desktop::desktop_cancel_exit,
             desktop::desktop_register_exit_guard, desktop::desktop_unregister_exit_guard,
             executions::execution_list, executions::execution_output, executions::execution_clear,
+            ai_terminals::ai_workspace, ai_terminals::ai_terminal_output, ai_terminals::ai_terminal_resize,
+            ai_terminals::ai_release_session,
+            ai_terminals::ai_take_over_session,
+            ai_terminals::ai_set_active_session,
+            mcp::mcp_set_auto_start, command_history::command_history, command_history::command_history_record, command_history::command_history_retry,
             quick_commands::list_quick_commands, quick_commands::save_quick_command, quick_commands::delete_quick_command,
             quick_commands::save_quick_command_group, quick_commands::delete_quick_command_group,
+            recent::list_recent_connections, launch::open_quick_connection,
             launch::open_external_link, launch::take_launch_requests, launch::register_ssh_protocol])
         .run(tauri::generate_context!())
         .expect("OrbitShell could not start");
