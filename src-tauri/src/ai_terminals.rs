@@ -1,4 +1,4 @@
-use crate::{ssh::{LiveSession, OutputBuffer, SessionCommand}, AppState};
+use crate::{command_guard::{self, InputGuard}, ssh::{LiveSession, OutputBuffer, SessionCommand}, AppState};
 use russh::{client, ChannelMsg, Pty};
 use serde::Serialize;
 use std::{sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
@@ -47,15 +47,18 @@ pub struct CommandResult {
     pub elapsed_ms: u64, pub running: bool, pub truncated: bool, pub note: String,
 }
 
+pub struct InputDelivery { pub sent: bool, pub buffered: bool }
+
 enum Input {
     Execute { command: String, result: oneshot::Sender<Result<CommandResult, String>> },
-    Literal { data: Zeroizing<Vec<u8>>, display_command: Option<String>, result: oneshot::Sender<Result<(), String>> },
+    Literal { data: Zeroizing<Vec<u8>>, marked: bool, result: oneshot::Sender<Result<InputDelivery, String>> },
     Resize(u32, u32),
 }
 
 pub struct AiTerminal {
     info: Mutex<TerminalInfo>, output: Mutex<OutputBuffer>, input: mpsc::Sender<Input>,
     cancel: CancellationToken,
+    input_closed: CancellationToken,
     access: Mutex<()>,
     source: Option<Arc<LiveSession>>,
 }
@@ -64,6 +67,7 @@ impl AiTerminal {
     fn revoke(&self) {
         let _access = self.access.lock().unwrap_or_else(|error| error.into_inner());
         self.cancel.cancel();
+        self.input_closed.cancel();
     }
     pub fn read_for_agent(&self, cursor: Option<u64>, max_bytes: usize) -> Result<TerminalOutput, String> {
         // Linearize MCP reads with release: a resolved Arc is not a continuing read capability.
@@ -93,6 +97,8 @@ impl AiTerminal {
     }
     pub async fn execute(&self, command: String, seconds: u64) -> Result<CommandResult, String> {
         if self.cancel.is_cancelled() { return Err("AI 终端已关闭，命令未发送".into()); }
+        if self.input_closed.is_cancelled() { return Err("Agent 会话已结束，命令未发送".into()); }
+        command_guard::check_command(&command)?;
         let (tx, rx) = oneshot::channel();
         self.input.try_send(Input::Execute { command, result: tx }).map_err(|_| "AI 终端输入队列繁忙或已关闭")?;
         match timeout(Duration::from_secs(seconds.clamp(1, 300)), rx).await {
@@ -107,10 +113,12 @@ impl AiTerminal {
             },
         }
     }
-    pub async fn input(&self, data: Vec<u8>, display_command: Option<String>) -> Result<(), String> {
+    pub async fn input(&self, data: Vec<u8>, marked: bool) -> Result<InputDelivery, String> {
+        let data = Zeroizing::new(data);
         if self.cancel.is_cancelled() { return Err("AI 终端已关闭，输入未发送".into()); }
+        if self.input_closed.is_cancelled() { return Err("Agent 会话已结束，输入未发送".into()); }
         let (tx, rx) = oneshot::channel();
-        self.input.try_send(Input::Literal { data: Zeroizing::new(data), display_command, result: tx }).map_err(|_| "AI 终端输入队列繁忙或已关闭")?;
+        self.input.try_send(Input::Literal { data, marked, result: tx }).map_err(|_| "AI 终端输入队列繁忙或已关闭")?;
         timeout(Duration::from_secs(20), rx).await.map_err(|_| "终端尚未就绪，输入仍在队列中，请先读取输出，不要重复发送")?
             .map_err(|_| "AI 终端已关闭")?
     }
@@ -145,7 +153,14 @@ impl AiTerminals {
         if let Ok(mut entries) = self.entries.lock() {
             if let Some(agent) = entries.agents.iter_mut().find(|a| a.id == id) { agent.connected = false; }
             for terminal in &entries.terminals {
-                if terminal.source.is_some() && terminal.info().is_ok_and(|i| i.agent_id == id) { terminal.revoke(); }
+                if terminal.info().is_ok_and(|i| i.agent_id == id) {
+                    if terminal.source.is_some() { terminal.revoke(); }
+                    else {
+                        // A running dedicated command stays alive, but unused prompt
+                        // answers must not linger after its MCP client session ends.
+                        terminal.input_closed.cancel();
+                    }
+                }
             }
         }
         self.notify(app, None);
@@ -235,7 +250,7 @@ impl AiTerminals {
             session_id: session_id.into(), session_name: live.profile.name.clone(), hostname: live.profile.hostname.clone(), port: live.profile.port,
             username: if live.profile.username.starts_with("b64>>") { "堡垒机会话".into() } else { live.profile.username.clone() },
             status: "interactive".into(), message: "已接管当前终端 · 人工输入已锁定 · 退出码未知".into(), command: None, started_at: None, elapsed_ms: 0, exit_code: None, updated_at: now(),
-        }), output: Mutex::new(OutputBuffer::new()), input: tx, cancel: CancellationToken::new(), access: Mutex::new(()), source: Some(live.clone()) });
+        }), output: Mutex::new(OutputBuffer::new()), input: tx, cancel: CancellationToken::new(), input_closed: CancellationToken::new(), access: Mutex::new(()), source: Some(live.clone()) });
         entries.terminals.push(terminal.clone()); drop(entries); self.notify(app, None);
         let task_terminal = terminal.clone(); let task_app = app.clone();
         tauri::async_runtime::spawn(async move { run_takeover(task_app, task_terminal, live, rx).await; });
@@ -265,7 +280,7 @@ impl AiTerminals {
             session_id: session_id.into(), session_name: live.profile.name.clone(), hostname: live.profile.hostname.clone(),
             port: live.profile.port, username: if live.profile.username.starts_with("b64>>") { "堡垒机会话".into() } else { live.profile.username.clone() },
             status: "connecting".into(), message: "正在打开独立 AI 终端…".into(), command: None, started_at: None, elapsed_ms: 0, exit_code: None, updated_at: now(),
-        }), output: Mutex::new(OutputBuffer::new()), input: tx, cancel: CancellationToken::new(), access: Mutex::new(()), source: None });
+        }), output: Mutex::new(OutputBuffer::new()), input: tx, cancel: CancellationToken::new(), input_closed: CancellationToken::new(), access: Mutex::new(()), source: None });
         entries.terminals.push(terminal.clone());
         drop(entries); self.notify(app, None);
         let task_terminal = terminal.clone(); let task_app = app.clone();
@@ -363,27 +378,43 @@ async fn run(app: AppHandle, terminal: Arc<AiTerminal>, live: Arc<LiveSession>, 
     let (mut reader, writer) = channel.split();
     terminal.patch(&app, |i| { i.status = "idle".into(); i.message = "AI 独立终端已连接 · 仅查看".into(); });
     let mut running: Option<Running> = None;
+    let mut guard = InputGuard::default();
+    let mut agent_gone = false;
     let message = loop {
         tokio::select! {
             biased;
             _ = terminal.cancel.cancelled() => break "AI 终端已停止；远端进程状态以服务器为准",
             _ = live.cancel.cancelled() => break "所属 SSH 会话已断开",
+            _ = terminal.input_closed.cancelled(), if !agent_gone => {
+                agent_gone = true; guard = InputGuard::default();
+                terminal.patch(&app, |i| i.message = "Agent 已断开，未提交输入已清空；已发送命令不受影响".into());
+            },
             input = inputs.recv() => match input {
                 Some(Input::Resize(columns, rows)) => { let _ = writer.window_change(columns.clamp(20, 500), rows.clamp(5, 300), 0, 0).await; },
-                Some(Input::Literal { data, display_command, result }) => {
-                    if let Some(command) = &display_command {
+                Some(Input::Literal { data, marked, result }) => {
+                    if terminal.input_closed.is_cancelled() { let _ = result.send(Err("Agent 会话已结束，排队输入未发送".into())); continue; }
+                    let prepared = match guard.prepare(&data, marked) {
+                        Ok(prepared) => prepared,
+                        Err(error) => { terminal.patch(&app, |i| i.message = error.clone()); let _ = result.send(Err(error)); continue; }
+                    };
+                    if prepared.data.is_empty() {
+                        terminal.patch(&app, |i| i.message = "AI 输入已缓存在本机，等待换行后检查并发送".into());
+                        let _ = result.send(Ok(InputDelivery { sent: false, buffered: true })); continue;
+                    }
+                    if let Some(command) = &prepared.command {
                         terminal.append(&app, format!("\r\n\x1b[36m$ \x1b[0m{}\r\n", command.replace('\n', "\r\n")).as_bytes());
                     }
-                    let submitted = data.last().is_some_and(|b| matches!(*b, b'\r' | b'\n'));
-                    let sent = writer.data_bytes(data.to_vec()).await.map_err(|_| "AI 终端输入发送失败".to_string());
-                    if sent.is_ok() && submitted {
-                        if let Some(command) = display_command { if let Ok(info) = terminal.info() { app.state::<AppState>().history.record(&app, &info.session_id, Uuid::new_v4().to_string(), &command, Some(&info.agent_name)); } }
+                    let sent = writer.data_bytes(prepared.data.to_vec()).await.map_err(|_| "AI 终端输入发送失败".to_string());
+                    if sent.is_ok() {
+                        if let Some(command) = prepared.command { if let Ok(info) = terminal.info() { app.state::<AppState>().history.record(&app, &info.session_id, Uuid::new_v4().to_string(), &command, Some(&info.agent_name)); } }
                     }
                     if sent.is_ok() && running.is_none() { terminal.patch(&app, |i| { i.status = "interactive".into(); i.message = "交互输入已发送，命令退出状态未知".into(); i.exit_code = None; }); }
-                    let failed = sent.is_err(); let _ = result.send(sent);
+                    let failed = sent.is_err(); let _ = result.send(sent.map(|_| InputDelivery { sent: true, buffered: prepared.buffered }));
                     if failed { break "AI 终端输入发送失败"; }
                 },
                 Some(Input::Execute { command, result }) => {
+                    if terminal.input_closed.is_cancelled() { let _ = result.send(Err("Agent 会话已结束，排队命令未发送".into())); continue; }
+                    if let Err(error) = guard.execute(&command) { terminal.patch(&app, |i| i.message = error.clone()); let _ = result.send(Err(error)); continue; }
                     if running.is_some() { let _ = result.send(Err("该 AI 终端已有命令在运行，请读取输出或用 send_input 交互，不要重复执行".into())); continue; }
                     let nonce = Uuid::new_v4().simple().to_string();
                     let prefix = format!("\x1b]633;OrbitShell;{nonce};").into_bytes();
@@ -451,6 +482,7 @@ async fn run_takeover(app: AppHandle, terminal: Arc<AiTerminal>, live: Arc<LiveS
             result = timeout(Duration::from_secs(5), response) => result.map_err(|_| "输入发送状态未确认，请读取输出后决定，不要重复发送")?.map_err(|_| "终端已关闭")?,
         }
     }
+    let mut guard = InputGuard::default();
     loop {
         tokio::select! {
             biased;
@@ -458,6 +490,7 @@ async fn run_takeover(app: AppHandle, terminal: Arc<AiTerminal>, live: Arc<LiveS
             _ = live.cancel.cancelled() => break,
             input = inputs.recv() => match input {
                 Some(Input::Execute { command, result }) => {
+                    if let Err(error) = guard.execute_raw(&command) { terminal.patch(&app, |i| i.message = error.clone()); let _ = result.send(Err(error)); continue; }
                     let input = format!("{}\r", command.replace("\r\n", "\n").replace('\n', "\r").trim_end_matches('\r')).into_bytes();
                     let sent = deliver(&terminal, &live, Zeroizing::new(input)).await;
                     if sent.is_ok() {
@@ -467,15 +500,22 @@ async fn run_takeover(app: AppHandle, terminal: Arc<AiTerminal>, live: Arc<LiveS
                     let _ = result.send(sent.and_then(|_| Ok(CommandResult { terminal_id: terminal.info()?.id, stdout: String::new(), stderr: String::new(), exit_code: None,
                         elapsed_ms: 0, running: true, truncated: false, note: "已向接管的原始 PTY 发送命令。使用 read_output 读取命令回显和实时输出；不推断提示符或退出码。确认输出后可继续发送指令，release_session 交回人工。".into() })));
                 },
-                Some(Input::Literal { data, display_command, result }) => {
+                Some(Input::Literal { data, marked, result }) => {
+                    let prepared = match guard.prepare(&data, marked) {
+                        Ok(prepared) => prepared,
+                        Err(error) => { terminal.patch(&app, |i| i.message = error.clone()); let _ = result.send(Err(error)); continue; }
+                    };
+                    if prepared.data.is_empty() {
+                        terminal.patch(&app, |i| i.message = "AI 输入已缓存在本机，等待换行后检查并发送".into());
+                        let _ = result.send(Ok(InputDelivery { sent: false, buffered: true })); continue;
+                    }
                     // Preserve the remote PTY's own echo rules, especially for password prompts.
-                    let submitted = data.last().is_some_and(|b| matches!(*b, b'\r' | b'\n'));
-                    let sent = deliver(&terminal, &live, data).await;
-                    if sent.is_ok() && submitted {
-                        if let Some(command) = display_command { if let Ok(info) = terminal.info() { app.state::<AppState>().history.record(&app, &info.session_id, Uuid::new_v4().to_string(), &command, Some(&info.agent_name)); } }
+                    let sent = deliver(&terminal, &live, prepared.data).await;
+                    if sent.is_ok() {
+                        if let Some(command) = prepared.command { if let Ok(info) = terminal.info() { app.state::<AppState>().history.record(&app, &info.session_id, Uuid::new_v4().to_string(), &command, Some(&info.agent_name)); } }
                     }
                     if sent.is_ok() { terminal.patch(&app, |i| { i.message = "AI 接管中 · 交互输入已发送，退出码未知".into(); }); }
-                    let _ = result.send(sent);
+                    let _ = result.send(sent.map(|_| InputDelivery { sent: true, buffered: prepared.buffered }));
                 },
                 Some(Input::Resize(_, _)) => {},
                 None => break,
@@ -525,7 +565,7 @@ mod tests {
         };
         let (input, _) = mpsc::channel(8);
         Arc::new(AiTerminal { info: Mutex::new(TerminalInfo { mode: "takeover".into(), id: "terminal".into(), agent_id: "agent".into(), agent_name: "Demo Agent".into(), session_id: "session".into(), session_name: "Demo".into(), hostname: "192.0.2.20".into(), port: 22, username: "demo".into(), status: "interactive".into(), message: String::new(), command: None, started_at: None, elapsed_ms: 0, exit_code: None, updated_at: 1 }),
-            output: Mutex::new(OutputBuffer::new()), input, cancel: CancellationToken::new(), access: Mutex::new(()), source: Some(Arc::new(live)) })
+            output: Mutex::new(OutputBuffer::new()), input, cancel: CancellationToken::new(), input_closed: CancellationToken::new(), access: Mutex::new(()), source: Some(Arc::new(live)) })
     }
 
     #[test]
@@ -545,6 +585,16 @@ mod tests {
         assert!(!terminal.source.as_ref().unwrap().cancel.is_cancelled());
         // The desktop may still display already retained scrollback after handoff.
         assert_eq!(terminal.read(None, 1024).unwrap().data, b"original-shell");
+    }
+
+    #[tokio::test]
+    async fn a_closed_agent_cannot_enqueue_more_input_without_disconnecting_ssh() {
+        let terminal = takeover();
+        terminal.input_closed.cancel();
+        assert!(terminal.execute("pwd".into(), 1).await.err().is_some_and(|error| error.contains("Agent")));
+        assert!(terminal.input(b"pwd\r".to_vec(), true).await.is_err());
+        assert!(!terminal.cancel.is_cancelled());
+        assert!(!terminal.source.as_ref().unwrap().cancel.is_cancelled());
     }
 
     #[test]

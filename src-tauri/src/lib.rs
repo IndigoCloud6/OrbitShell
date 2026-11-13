@@ -10,6 +10,7 @@ mod remote_editor;
 mod desktop;
 mod recent;
 mod command_history;
+mod command_guard;
 
 use anyhow::{anyhow, Context};
 use russh_sftp::protocol::OpenFlags;
