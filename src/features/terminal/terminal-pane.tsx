@@ -16,6 +16,8 @@ import {usePreferences} from '../../app/preferences';
 import {terminalPalette} from './palette';
 import type {ShellSession, TerminalRuntime} from './runtime';
 import {MenuShortcut, openContextMenuFromKeyboard, useCopyText} from '../../shared/context-menu';
+import {readClipboardText, writeClipboardText} from '../../shared/clipboard';
+import {errorMessage} from '../../shared/desktop';
 
 interface Props {
   session: Pick<ShellSession, 'id' | 'status'> & {profile: Pick<ShellSession['profile'], 'name'>};
@@ -42,6 +44,8 @@ export function TerminalPane({session, runtime, active, readOnly = false, fontSi
   const [paletteVersion, setPaletteVersion] = useState(0);
   const [clipboardError, setClipboardError] = useState('');
   const contextSelection = useRef<{terminal: Terminal; text: string} | null>(null);
+  const activeTarget = useRef(active);
+  activeTarget.current = active;
   const [hasSelection, setHasSelection] = useState(false);
   const copy = useCopyText();
   const {mode} = useThemePreference();
@@ -89,8 +93,8 @@ export function TerminalPane({session, runtime, active, readOnly = false, fontSi
         event.preventDefault();
         event.stopPropagation();
         setClipboardError('');
-        void navigator.clipboard.writeText(terminal.getSelection()).catch(() => {
-          setClipboardError('无法写入系统剪贴板，请重试复制或使用“编辑 → 复制终端选区”。');
+        void writeClipboardText(terminal.getSelection()).catch(error => {
+          setClipboardError(errorMessage(error));
         });
         return false;
       }
@@ -99,10 +103,10 @@ export function TerminalPane({session, runtime, active, readOnly = false, fontSi
         event.stopPropagation();
         if (terminal.options.disableStdin) return false;
         setClipboardError('');
-        void navigator.clipboard.readText().then(text => {
-          if (runtime.terminal === terminal && !terminal.options.disableStdin) terminal.paste(text);
-        }).catch(() => {
-          setClipboardError('无法读取系统剪贴板，请重试粘贴或使用“编辑 → 粘贴到终端”。');
+        void readClipboardText().then(text => {
+          if (activeTarget.current && runtime.terminal === terminal && !terminal.options.disableStdin) terminal.paste(text);
+        }).catch(error => {
+          setClipboardError(errorMessage(error));
         });
         return false;
       }
@@ -177,9 +181,9 @@ export function TerminalPane({session, runtime, active, readOnly = false, fontSi
     const terminal = contextSelection.current?.terminal;
     if (!terminal || terminal.options.disableStdin) return;
     setClipboardError('');
-    void navigator.clipboard.readText().then(text => {
-      if (runtime.terminal === terminal && !terminal.options.disableStdin) terminal.paste(text);
-    }).catch(() => setClipboardError('无法读取系统剪贴板，请重试粘贴。'));
+    void readClipboardText().then(text => {
+      if (activeTarget.current && runtime.terminal === terminal && !terminal.options.disableStdin) terminal.paste(text);
+    }).catch(error => setClipboardError(errorMessage(error)));
   };
   const countLabel = !term ? '输入以查找' : results.resultCount < 0 ? '1000+ 个匹配' :
     results.resultCount ? `${Math.max(0, results.resultIndex + 1)} / ${results.resultCount}` : '无匹配';

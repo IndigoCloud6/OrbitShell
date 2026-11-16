@@ -32,7 +32,7 @@ export function EditorDialogs({controller}: {controller: EditorController}) {
       <VStack className="editor-comparison-layout" gap={0}>
         <DialogHeader className="orbit-dialog-header" title={`${compared.name} · 版本对比`} hasDivider onOpenChange={open => { if (!open) controller.setComparison(null); }} />
         <HStack className="editor-diff-labels" gap={0}><StackItem size="fill"><Text maxLines={1}>{comparison.title}</Text></StackItem><StackItem size="fill"><Text>当前编辑内容</Text></StackItem></HStack>
-        <CodeComparison name={compared.name} original={comparison.original.content} current={compared.content} />
+        <CodeComparison name={compared.name} path={compared.path} original={comparison.original.content} current={compared.content} />
         <HStack className="orbit-dialog-footer" gap={2} hAlign="between" wrap="wrap"><Text color="secondary">{comparison.kind === 'snapshot' ? '先恢复为草稿，再确认保存到远程。' : '保存仍会重新核对远程版本，并先记录快照。'}</Text>
           <HStack gap={2} wrap="wrap"><Button label="关闭对比" onClick={() => controller.setComparison(null)} />{comparison.kind === 'snapshot' ? <Button label="恢复此版本到编辑器" variant="primary" isDisabled={busy} onClick={() => controller.setRestoreRequest({id: compared.id, text: comparison.original})} /> : <>
             <Button label="采用远程版本…" isDisabled={busy} onClick={() => setConfirmRemote('adopt')} /><Button label="保存当前编辑…" variant="primary" isDisabled={busy} onClick={() => setConfirmRemote('overwrite')} />

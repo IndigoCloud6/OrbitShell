@@ -14,6 +14,7 @@ import {Table, proportional} from '@astryxdesign/core/Table';
 import type {TableColumn} from '@astryxdesign/core/Table';
 import {ArrowLeft, Network, Search, Terminal, LockKeyhole, Copy, ExternalLink, ListChecks, MoreHorizontal} from 'lucide-react';
 import {desktopCommand, errorMessage, isDesktop} from '../../shared/desktop';
+import {writeClipboardText} from '../../shared/clipboard';
 import {usePreferences} from '../../app/preferences';
 import {McpToolList} from '../workbench/mcp-tool-list';
 import {executionLabels, formatElapsed, useExecutionFeed, useExecutions} from './execution-feed';
@@ -127,7 +128,7 @@ function OutputView({record, feed, readOutput}: {record: ExecutionRecord; feed: 
       </HStack>
       <StackItem size="fill" /><CheckboxInput label="自动跟随" size="sm" value={follow} onChange={setFollow} />
       <Button label="复制输出" size="sm" variant="ghost" icon={<Copy size="1em" />} isDisabled={!hasOutput} onClick={() => {
-        void navigator.clipboard.writeText(output.current?.textContent ?? '').catch(failure => setError(errorMessage(failure)));
+        void writeClipboardText(output.current?.textContent ?? '').catch(failure => setError(errorMessage(failure)));
       }} />
     </HStack>
     {error && <Banner className="compact-feedback" status="error" title="输出操作未完成" description={error} isDismissable onDismiss={() => setError('')} />}
@@ -189,7 +190,7 @@ export function AiExecutionPanelView({activeId, availableSessionIds, onLocateSes
   const clearRecords = () => {
     setBusy(true); setError(''); void feed.clear().catch(failure => setError(errorMessage(failure))).finally(() => setBusy(false));
   };
-  const copyCommand = () => { if (selected?.command) void navigator.clipboard.writeText(selected.command).catch(failure => setError(errorMessage(failure))); };
+  const copyCommand = () => { if (selected?.command) void writeClipboardText(selected.command).catch(failure => setError(errorMessage(failure))); };
   const rows = records.map(record => ({...record}));
   const columns: TableColumn<(typeof rows)[number]>[] = [
     {key: 'startedAt', header: '时间', width: proportional(.85, {minWidth: 80}), renderCell: record => <Text hasTabularNumbers>{new Date(record.startedAt).toLocaleTimeString('zh-CN', {hour12: false})}</Text>},

@@ -6,6 +6,7 @@ import {Text} from '@astryxdesign/core/Text';
 import {useToast} from '@astryxdesign/core/Toast';
 import {Copy, ClipboardPaste, Scissors, TextSelect} from 'lucide-react';
 import {errorMessage} from './desktop';
+import {readClipboardText, writeClipboardText} from './clipboard';
 import type {KeyboardEvent} from 'react';
 
 export function openContextMenuFromKeyboard(event: KeyboardEvent<HTMLElement>) {
@@ -25,7 +26,7 @@ export function MenuShortcut({children}: {children: ReactNode}) { return <Text c
 export function useCopyText() {
   const toast = useToast();
   return useCallback(async (text: string) => {
-    try { await navigator.clipboard.writeText(text); }
+    try { await writeClipboardText(text); }
     catch { toast({type: 'error', body: '无法写入系统剪贴板，请重试复制。', uniqueID: 'orbit-context-copy'}); }
   }, [toast]);
 }
@@ -84,9 +85,9 @@ export function AppContextMenus({children}: {children: ReactNode}) {
     if (!snapshot || !snapshot.field.isConnected) return;
     try {
       if (action === 'select') { snapshot.field.focus(); snapshot.field.select(); return; }
-      if (action === 'paste') { replace(snapshot, await navigator.clipboard.readText()); return; }
+      if (action === 'paste') { replace(snapshot, await readClipboardText()); return; }
       if (secret(snapshot.field) || snapshot.start === snapshot.end) return;
-      await navigator.clipboard.writeText(snapshot.value.slice(snapshot.start, snapshot.end));
+      await writeClipboardText(snapshot.value.slice(snapshot.start, snapshot.end));
       if (action === 'cut') replace(snapshot, '');
     } catch (error) { toast({type: 'error', body: errorMessage(error), uniqueID: 'orbit-context-edit'}); }
   };

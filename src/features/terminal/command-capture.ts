@@ -3,7 +3,7 @@ import {desktopCommand} from '../../shared/desktop';
 
 // Read the command actually echoed by the terminal, including history recall and tab completion.
 // Never infer commands from arbitrary output or collect raw password / interactive-program input.
-function commandOnLine(terminal: Terminal, row: number): string | null {
+export function commandOnLine(terminal: Terminal, row: number): string | null {
   const buffer = terminal.buffer.active;
   if (buffer.type !== 'normal' || row < 0) return null;
   let first = row;

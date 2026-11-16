@@ -9,7 +9,7 @@ import {Banner} from '@astryxdesign/core/Banner';
 import {List, ListItem} from '@astryxdesign/core/List';
 import {ContextMenu} from '@astryxdesign/core/ContextMenu';
 import type {ContextMenuOption} from '@astryxdesign/core/ContextMenu';
-import {ArrowLeft, RefreshCw, Eye, EyeOff, Upload, Download, MoreHorizontal, Folder, FolderOpen, Copy, PanelRightClose, FilePenLine} from 'lucide-react';
+import {ArrowLeft, RefreshCw, Eye, EyeOff, Upload, Download, MoreHorizontal, Folder, FolderOpen, Copy, PanelRightClose, FilePenLine, FolderSync} from 'lucide-react';
 import {formatBytes} from './file-utils';
 import type {RemoteEntry} from './file-utils';
 import {RemoteFileIcon} from './remote-file-icon';
@@ -25,6 +25,8 @@ interface Props {
   onHidden: () => void; onDensity: () => void; onUpload: (directory?: string) => void; onDownload: (entry?: RemoteEntry) => void;
   onSelect: (entry: RemoteEntry) => void; onCollapse: () => void;
   onEdit?: (entry: RemoteEntry) => void;
+  onLocateDirectory?: () => void; locating?: boolean; locateDirectoryReason?: string;
+  actionError?: string; onDismissActionError?: () => void;
 }
 export function FileBrowserView(props: Props) {
   const entries = props.showHidden ? props.entries : props.entries.filter(entry => !entry.name.startsWith('.'));
@@ -51,6 +53,7 @@ export function FileBrowserView(props: Props) {
     {label: '上传文件', icon: <Upload />, isDisabled: unavailable, onClick: () => snapshot.onUpload(directory)},
     {label: '刷新目录', icon: <RefreshCw />, isDisabled: unavailable, onClick: snapshot.onRefresh},
     {label: '返回上级目录', icon: <ArrowLeft />, isDisabled: unavailable, onClick: () => snapshot.onNavigate(`${directory}/..`)},
+    {label: '定位到终端当前目录', icon: <FolderSync />, isDisabled: unavailable || !snapshot.onLocateDirectory || Boolean(props.locating), onClick: () => snapshot.onLocateDirectory?.()},
     {type: 'divider'},
     {label: snapshot.showHidden ? '隐藏点号文件' : '显示隐藏文件', icon: snapshot.showHidden ? <EyeOff /> : <Eye />, onClick: snapshot.onHidden},
     {label: '复制目录路径', icon: <Copy />, isDisabled: !snapshot.connected, onClick: () => { void copy(directory); }},
@@ -66,6 +69,8 @@ export function FileBrowserView(props: Props) {
         <HStack className="file-toolbar-group" gap={1}>
           <IconButton className="file-action" size="sm" label="上级目录" tooltip="上级目录" icon={<ArrowLeft />} variant="ghost" isDisabled={Boolean(props.preparing)} onClick={() => props.onNavigate(`${props.directoryPath ?? props.path}/..`)} />
           <IconButton className="file-action" size="sm" label="刷新目录" tooltip="刷新目录" icon={<RefreshCw />} variant="ghost" isDisabled={Boolean(props.preparing)} isLoading={Boolean(props.fetching)} onClick={props.onRefresh} />
+          <IconButton className="file-action" size="sm" label="定位到终端当前目录" tooltip={props.locateDirectoryReason ?? '定位到 SSH 终端当前目录 · 需回到空提示符'} icon={<FolderSync />} variant="ghost"
+            isDisabled={!props.onLocateDirectory || Boolean(props.preparing) || Boolean(props.locating)} isLoading={Boolean(props.locating)} onClick={() => props.onLocateDirectory?.()} />
           <IconButton className="file-action" size="sm" label={props.showHidden ? '隐藏点号文件' : '显示隐藏文件'} tooltip={props.showHidden ? '隐藏点号文件' : '显示隐藏文件'} aria-pressed={props.showHidden} data-active={String(props.showHidden)}
             icon={props.showHidden ? <Eye /> : <EyeOff />} variant="ghost" onClick={props.onHidden} />
         </HStack>
@@ -79,6 +84,8 @@ export function FileBrowserView(props: Props) {
         </HStack>
       </HStack>
     </VStack>}
+    {props.actionError && <Banner className="compact-feedback" status="warning" title="目录定位未完成" description={props.actionError}
+      isDismissable onDismiss={() => props.onDismissActionError?.()} />}
     <StackItem size="fill" isScrollable className="file-browser" aria-label="远程文件列表">
     <ContextMenu key={props.contextKey ?? 'files'} data-orbit-context="files" data-directory-empty={String(isDirectoryEmpty)} className="orbit-context-menu" label={entry?.name ?? '远程文件'} size="sm" menuWidth="calc(var(--orbit-unit) * 18)" items={menu}
       onKeyDownCapture={openContextMenuFromKeyboard}

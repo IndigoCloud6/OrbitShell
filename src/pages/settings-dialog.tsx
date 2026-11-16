@@ -15,6 +15,7 @@ import {Moon, Sun, Monitor, Palette, Network, ShieldCheck, Copy, Link2} from 'lu
 import {usePreferences} from '../app/preferences';
 import {useThemePreference} from '../app/theme';
 import {desktopCommand, errorMessage, isDesktop} from '../shared/desktop';
+import {writeClipboardText} from '../shared/clipboard';
 import {desktopStatusKey} from '../shared/desktop-lifecycle';
 import type {DesktopStatus} from '../shared/desktop-lifecycle';
 import {McpToolList} from '../features/workbench/mcp-tool-list';
@@ -175,7 +176,7 @@ export default function SettingsDialog() {
                     <Button label="复制 MCP 客户端配置" variant="primary" icon={<Copy size="1em" />} onClick={() => {
                       if (!mcp.data?.enabled) return;
                       const config = {mcpServers: {OrbitShell: {type: 'http', url: mcp.data.url, headers: {Authorization: `Bearer ${mcp.data.token}`}}}};
-                      void navigator.clipboard.writeText(JSON.stringify(config, null, 2)).then(() => setFeedback('已复制客户端配置')).catch(failure => setError(errorMessage(failure)));
+                      void writeClipboardText(JSON.stringify(config, null, 2)).then(() => setFeedback('已复制客户端配置')).catch(failure => setError(errorMessage(failure)));
                     }} />
                     {feedback && <Text color="accent" role="status">{feedback}</Text>}
                   </HStack>

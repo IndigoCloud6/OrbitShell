@@ -6,13 +6,15 @@ import {IconButton} from '@astryxdesign/core/IconButton';
 import {Banner} from '@astryxdesign/core/Banner';
 import {Drawer, DrawerHeader} from '@astryxdesign/core/Drawer';
 import {List, ListItem} from '@astryxdesign/core/List';
-import {Clock3, FileText, History, Save, Search} from 'lucide-react';
+import {DropdownMenu} from '@astryxdesign/core/DropdownMenu';
+import {Clock3, FileText, History, Save, Search, WandSparkles} from 'lucide-react';
 import {desktopCommand, errorMessage} from '../../shared/desktop';
 import {formatBytes} from '../files/file-utils';
 import {CodeEditor, languageName} from './code-editor';
 import {isDirty, snapshotLabel} from './types';
 import type {EditorDocument, RemoteText, SnapshotInfo} from './types';
 import type {EditorController} from './use-remote-editor';
+import type {FormatMode} from './format-document';
 
 export interface EditorHistorySource {
   list: (id: string) => Promise<SnapshotInfo[]>;
@@ -37,6 +39,8 @@ export function RemoteEditorPane({file, active, connected, controller, historySo
   const [previewLoading, setPreviewLoading] = useState(false);
   const [reload, setReload] = useState(0);
   const [cursor, setCursor] = useState({line: 1, column: 1});
+  const [formatRequest, setFormatRequest] = useState<{id: number; mode: FormatMode}>({id: 0, mode: 'auto'});
+  const format = (mode: FormatMode) => setFormatRequest(previous => ({id: previous.id + 1, mode}));
   useEffect(() => { if (file.historyRequest) setHistoryOpen(true); }, [file.historyRequest]);
   useEffect(() => { if (!active) setHistoryOpen(false); }, [active]);
   useEffect(() => {
@@ -69,6 +73,11 @@ export function RemoteEditorPane({file, active, connected, controller, historySo
       </VStack></StackItem>
       <HStack gap={1} vAlign="center" className="editor-actions">
         <IconButton label="查找文件内容" tooltip="查找 / 替换 · Ctrl + F" size="sm" icon={<Search />} variant="ghost" onClick={() => controller.patch(file.id, {searchRequest: file.searchRequest + 1})} />
+        <DropdownMenu presentation="popover" alignment="end" button={{label: '格式化', tooltip: '格式化草稿 · Shift + Alt + F', icon: <WandSparkles size="1em" />, size: 'sm', variant: 'ghost', isDisabled: file.saving}}
+          items={[{label: '自动识别并格式化', isDisabled: file.saving, onClick: () => format('auto')},
+            {label: '按 Nginx 配置格式化', isDisabled: file.saving, onClick: () => format('nginx')},
+            {label: '按 JSON 格式化', isDisabled: file.saving, onClick: () => format('json')},
+            {type: 'divider'}, {label: '仅整理当前语言缩进', isDisabled: file.saving, onClick: () => format('indent')}]} />
         <Button label="快照历史" size="sm" variant="ghost" icon={<History size="1em" />} onClick={() => setHistoryOpen(true)} />
         <Button label="保存到远程" tooltip={!connected ? '所属会话已断开，草稿仍可编辑和复制' : '保存到远程 · Ctrl + S'} size="sm" variant="primary" icon={<Save size="1em" />}
           isLoading={file.saving} isDisabled={!connected || !isDirty(file)} onClick={() => { void controller.save(file.id); }} />
@@ -78,11 +87,12 @@ export function RemoteEditorPane({file, active, connected, controller, historySo
     {file.error && <Banner className="compact-feedback editor-feedback" status="error" title="文件操作未完成" description={file.error} isDismissable onDismiss={() => controller.patch(file.id, {error: ''})} />}
     {file.feedback && <Banner className="compact-feedback editor-feedback" status="success" title={file.feedback} isDismissable onDismiss={() => controller.patch(file.id, {feedback: ''})} />}
     {file.conflict && <Banner className="compact-feedback editor-feedback" status="warning" title="远程文件已变更，当前草稿尚未保存" endContent={<Button label="查看差异" size="sm" onClick={() => controller.setComparison({documentId: file.id, original: file.conflict!, title: '当前远程版本', kind: 'remote'})} />} />}
-    <StackItem size="fill" className="editor-code-region"><CodeEditor name={file.name} value={file.content} active={active} readOnly={file.saving} findRequest={file.searchRequest}
+    <StackItem size="fill" className="editor-code-region"><CodeEditor name={file.name} path={file.path} value={file.content} active={active} readOnly={file.saving} findRequest={file.searchRequest}
+      formatRequest={formatRequest} onFormatFeedback={(message, failed) => controller.patch(file.id, failed ? {error: message, feedback: ''} : {feedback: message, error: ''})}
       onChange={content => controller.patch(file.id, {content, feedback: ''})} onCursor={(line, column) => setCursor({line, column})} /></StackItem>
     <HStack className="editor-status" hAlign="between" vAlign="center" gap={2} wrap="wrap">
       <HStack gap={1} vAlign="center"><History size="1em" /><Text>{file.saving ? '正在记录快照并保存…' : isDirty(file) ? '未保存 · 保存前自动记录远程原文件快照' : '未修改 · 保存前自动记录远程原文件快照'}</Text></HStack>
-      <Text className="mono-text" hasTabularNumbers>UTF-8{file.document.bom ? ' BOM' : ''} · {file.document.lineEnding} · {languageName(file.name)} · {cursor.line}:{cursor.column}</Text>
+      <Text className="mono-text" hasTabularNumbers>UTF-8{file.document.bom ? ' BOM' : ''} · {file.document.lineEnding} · {languageName(file.name, file.path)} · {cursor.line}:{cursor.column}</Text>
     </HStack>
     <Drawer isOpen={historyOpen && active} onOpenChange={setHistoryOpen} label={`${file.name}快照历史`} hasScrim={false} width="min(90vw, calc(var(--orbit-unit) * 34))" padding={0} className="editor-history-drawer">
       <VStack height="100%" gap={0} className="editor-history-layout">
@@ -98,7 +108,7 @@ export function RemoteEditorPane({file, active, connected, controller, historySo
         </StackItem>
         {selected && <VStack className="editor-snapshot-preview" gap={0}>
           <HStack className="editor-preview-heading" gap={2} vAlign="center"><Text>快照预览 · {snapshotLabel(selected.reason)}</Text><Text color="secondary">{preview ? `UTF-8${preview.bom ? ' BOM' : ''} · ${preview.lineEnding}` : ''}</Text></HStack>
-          {previewLoading ? <Text className="panel-message">正在读取版本…</Text> : preview && <CodeEditor name={file.name} value={preview.content} active={false} readOnly findRequest={0} onChange={() => {}} onCursor={() => {}} />}
+          {previewLoading ? <Text className="panel-message">正在读取版本…</Text> : preview && <CodeEditor name={file.name} path={file.path} value={preview.content} active={false} readOnly findRequest={0} onChange={() => {}} onCursor={() => {}} />}
         </VStack>}
         <VStack className="editor-history-footer" gap={2}>
           <Text color="secondary">快照仅保存在本机 · 每个文件保留最近 20 个版本</Text>

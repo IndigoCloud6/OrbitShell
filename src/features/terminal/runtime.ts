@@ -3,6 +3,7 @@ import type {Terminal} from '@xterm/xterm';
 import {desktopCommand, errorMessage, isDesktop} from '../../shared/desktop';
 import type {ConnectionProfile} from '../connections/types';
 import {CommandCapture} from './command-capture';
+import {directoryQuery, isDirectoryPromptReady, validateTerminalDirectory} from './working-directory';
 
 export type SessionStatus = 'connecting' | 'hostKey' | 'connected' | 'closed' | 'error';
 export interface HostKey {hostname: string; port: number; fingerprint: string; algorithm: string}
@@ -26,6 +27,7 @@ export interface ShellSession {
   ephemeral?: boolean;
   columns: number;
   rows: number;
+  directoryQueryPending?: boolean;
 }
 
 type Writer = (bytes: Uint8Array, done: () => void) => void;
@@ -45,6 +47,12 @@ export class TerminalRuntime {
   private ackTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly events: Channel<SessionEvent> | null;
   private readonly capture: CommandCapture;
+  private inputUnsettled = false;
+  private draftSeen = false;
+  private waitingForPrompt = false;
+  private promptLineFeedSeen = false;
+  private directoryStarting = false;
+  private directoryRequest: {id: string; resolve: (path: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>} | null = null;
 
   constructor(id: string, private readonly update: (patch: Partial<ShellSession>) => void) {
     this.id = id;
@@ -72,6 +80,7 @@ export class TerminalRuntime {
       if (this.connected) void this.resize(this.columns, this.rows);
     } else {
       this.connected = false;
+      this.finishDirectory(new Error('终端已断开，无法定位目录。'));
       this.update({status: event.type === 'error' ? 'error' : 'closed', message: event.message, hostKey: null});
       const safe = event.message.replace(/[\x00-\x1f\x7f]/g, ' ');
       const bytes = new TextEncoder().encode(`\r\n[OrbitShell] ${safe}\r\n`);
@@ -97,13 +106,30 @@ export class TerminalRuntime {
 
   attach(writer: Writer) {
     this.writer = writer;
-    const lineFeed = this.terminal?.onLineFeed(() => { if (this.terminal) this.capture.lineFeed(this.terminal); });
+    const lineFeed = this.terminal?.onLineFeed(() => { if (this.waitingForPrompt) this.promptLineFeedSeen = true; if (this.terminal) this.capture.lineFeed(this.terminal); });
+    const directory = this.terminal?.parser.registerOscHandler(633, data => {
+      if (!data.startsWith('OrbitShellCwd;')) return false;
+      const request = this.directoryRequest;
+      if (request && data.startsWith(`OrbitShellCwd;${request.id};`)) {
+        try { this.finishDirectory(validateTerminalDirectory(data.slice(`OrbitShellCwd;${request.id};`.length))); }
+        catch (failure) { this.finishDirectory(new Error(errorMessage(failure))); }
+      }
+      return true;
+    });
     for (const bytes of this.pending.splice(0)) this.write(bytes);
-    return () => { lineFeed?.dispose(); this.capture.reset(); this.writer = null; };
+    return () => { lineFeed?.dispose(); directory?.dispose(); this.finishDirectory(new Error('终端视图已切换，请重新定位目录。')); this.capture.reset(); this.writer = null; };
   }
 
   private write(bytes: Uint8Array) {
     this.writer?.(bytes, () => {
+      const terminal = this.terminal;
+      if (terminal && (this.waitingForPrompt || this.inputUnsettled || this.draftSeen)) {
+        if (this.waitingForPrompt) {
+          if (this.promptLineFeedSeen && isDirectoryPromptReady(terminal)) { this.waitingForPrompt = false; this.inputUnsettled = false; this.draftSeen = false; }
+        } else if (isDirectoryPromptReady(terminal)) {
+          if (this.draftSeen) { this.inputUnsettled = false; this.draftSeen = false; }
+        } else { this.draftSeen = true; this.inputUnsettled = false; }
+      }
       this.ackBytes += bytes.byteLength;
       if (this.ackTimer || this.disposed) return;
       this.ackTimer = setTimeout(() => {
@@ -117,6 +143,7 @@ export class TerminalRuntime {
 
   input(data: string | Uint8Array) {
     if (!this.connected || this.disposed) return;
+    if (this.directoryRequest) return;
     this.capture.input(data, this.terminal);
     void this.queueInput(data).catch(error => {
       this.capture.reset();
@@ -132,8 +159,13 @@ export class TerminalRuntime {
     await this.queueInput(appendNewline ? `${data.replace(/\r+$/, '')}\r` : data, appendNewline ? command : undefined);
   }
 
-  private queueInput(data: string | Uint8Array, submittedCommand?: string): Promise<void> {
+  private queueInput(data: string | Uint8Array, submittedCommand?: string, trackPrompt = true): Promise<void> {
+    if (trackPrompt && this.directoryRequest) return Promise.reject(new Error('正在查询终端目录，请稍后发送指令。'));
     const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+    if (trackPrompt && bytes.length) {
+      this.inputUnsettled = true;
+      if (bytes.includes(13) || bytes.includes(10) || bytes.includes(3)) { this.waitingForPrompt = true; this.promptLineFeedSeen = false; }
+    }
     const historyId = submittedCommand ? crypto.randomUUID() : null;
     // Keep each paste/shortcut ordered and bound to this runtime, even after tab switches.
     const queued = this.inputQueue.then(async () => {
@@ -148,6 +180,34 @@ export class TerminalRuntime {
     return queued;
   }
 
+  async requestWorkingDirectory(): Promise<string> {
+    if (this.directoryStarting || this.directoryRequest) throw new Error('正在查询终端目录，请稍候。');
+    this.directoryStarting = true;
+    try {
+      await this.inputQueue;
+      const terminal = this.terminal;
+      if (!this.connected || this.disposed || !terminal) throw new Error('终端尚未连接，无法定位目录。');
+      if (terminal.options.disableStdin) throw new Error('当前终端由 AI 接管或暂不可输入，请先交回人工。');
+      if (this.inputUnsettled || this.waitingForPrompt || !isDirectoryPromptReady(terminal)) throw new Error('请先等待命令结束，并回到没有未提交内容的 Shell 提示符后再定位。');
+      this.capture.reset();
+      return await new Promise<string>((resolve, reject) => {
+        const id = crypto.randomUUID().replaceAll('-', '');
+        const timer = setTimeout(() => this.finishDirectory(new Error('终端目录查询超时；当前 Shell 可能不支持此查询，文件面板保持原位置。')), 8000);
+        this.directoryRequest = {id, resolve, reject, timer};
+        this.update({directoryQueryPending: true});
+        void this.queueInput(directoryQuery(id), undefined, false).catch(failure => this.finishDirectory(new Error(errorMessage(failure))));
+      });
+    } finally { this.directoryStarting = false; }
+  }
+
+  private finishDirectory(result: string | Error) {
+    const request = this.directoryRequest;
+    if (!request) return;
+    this.directoryRequest = null; clearTimeout(request.timer);
+    this.update({directoryQueryPending: false});
+    if (result instanceof Error) request.reject(result); else request.resolve(result);
+  }
+
   async resize(columns: number, rows: number) {
     this.columns = columns;
     this.rows = rows;
@@ -160,6 +220,7 @@ export class TerminalRuntime {
   dispose() {
     this.disposed = true;
     this.connected = false;
+    this.finishDirectory(new Error('会话已关闭，无法定位目录。'));
     if (this.ackTimer) clearTimeout(this.ackTimer);
     this.writer = null;
     this.pending = [];

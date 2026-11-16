@@ -13,6 +13,7 @@ import {Table, proportional, pixel} from '@astryxdesign/core/Table';
 import {Banner} from '@astryxdesign/core/Banner';
 import {Bot, Check, Copy, History, Info, Layers, RefreshCw, Search, Server, UserRound} from 'lucide-react';
 import {desktopCommand, errorMessage, isDesktop} from '../../shared/desktop';
+import {writeClipboardText} from '../../shared/clipboard';
 import {usePreferences} from '../../app/preferences';
 
 export const HISTORY_TAB_ID = 'orbit-command-history';
@@ -61,7 +62,7 @@ export function CommandHistoryPane({active, findRequest}: {active: boolean; find
   const copyCommand = (entry: Entry) => {
     if (entry.redacted) return;
     setError('');
-    void navigator.clipboard.writeText(entry.command).then(() => setFeedback('命令已复制')).catch(failure => setError(errorMessage(failure)));
+    void writeClipboardText(entry.command).then(() => setFeedback('命令已复制')).catch(failure => setError(errorMessage(failure)));
   };
   return <><VStack className="command-history-pane" hidden={!active} gap={0}>
     <HStack className="history-toolbar" gap={3} vAlign="center" wrap="wrap">

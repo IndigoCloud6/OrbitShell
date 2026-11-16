@@ -22,6 +22,7 @@ import {useTransfers} from '../files/transfer-provider';
 import {usePreferences} from '../../app/preferences';
 import {useThemePreference} from '../../app/theme';
 import {desktopCommand, errorMessage, isDesktop} from '../../shared/desktop';
+import {readClipboardText, writeClipboardText} from '../../shared/clipboard';
 import {desktopStatusKey} from '../../shared/desktop-lifecycle';
 import type {DesktopStatus} from '../../shared/desktop-lifecycle';
 import {IdeLayout} from './ide-layout';
@@ -136,6 +137,8 @@ export default function Workbench() {
   }, [activeId, editor.activeId, activeAiId, aiTabs, historyActive]);
   const viewedAi = activeAi ?? activeTakeover;
   const focusedTerminal = () => historyActive ? null : activeAi ? aiFeed.getRuntime(activeAi.id).terminal : activeId ? getRuntime(activeId)?.terminal : null;
+  const clipboardTarget = useRef<string | null>(null);
+  clipboardTarget.current = historyActive || editor.active || activeAi ? null : activeId;
   const starting = !sessions.length && !editor.documents.length && !aiTabs.length && !historyOpen;
   const filesVisible = historyActive ? false : starting ? startFilesOpen : showFiles;
   const toggleFiles = () => { if (historyActive) { restoreWorkspace(); setShowFiles(true); } else if (starting) setStartFilesOpen(value => !value); else setShowFiles(!showFiles); };
@@ -275,11 +278,14 @@ export default function Workbench() {
     {label: '编辑', items: [
       {label: '复制终端选区', endContent: <Text className="menu-shortcut">Ctrl + C</Text>, isDisabled: historyActive || (!active && !activeAi) || Boolean(editor.active), onClick: () => {
         const text = focusedTerminal()?.getSelection();
-        if (text) void navigator.clipboard.writeText(text).catch(error => setNotice(errorMessage(error)));
+        if (text) void writeClipboardText(text).catch(error => setNotice(errorMessage(error)));
       }},
       {label: '粘贴到终端', endContent: <Text className="menu-shortcut">Ctrl + V</Text>, isDisabled: historyActive || Boolean(activeAi || activeTakeover) || active?.status !== 'connected' || Boolean(editor.active), onClick: () => {
-        void navigator.clipboard.readText().then(text => {
-          if (active) getRuntime(active.id)?.terminal?.paste(text);
+        const terminal = active ? getRuntime(active.id)?.terminal : null;
+        const targetId = active?.id;
+        if (!terminal || terminal.options.disableStdin || !targetId) return;
+        void readClipboardText().then(text => {
+          if (clipboardTarget.current === targetId && getRuntime(targetId)?.terminal === terminal && !terminal.options.disableStdin) terminal.paste(text);
         }).catch(error => setNotice(errorMessage(error)));
       }},
       {label: historyActive ? '搜索执行历史' : editor.active ? '查找文件内容' : '查找终端内容', endContent: <Text className="menu-shortcut">Ctrl + F</Text>, isDisabled: !historyActive && !active && !activeAi && !editor.active, onClick: historyActive ? () => setHistoryFind(value => value + 1) : editor.active ? editor.find : openSearch},
@@ -322,7 +328,12 @@ export default function Workbench() {
         const next = new URLSearchParams(params); if (value) next.set('q', value); else next.delete('q'); void setParams(next, {replace: true});
       }} onOpen={openProfile} onCreate={() => { void navigate('/connections/new'); }} onManage={() => { void navigate('/connections'); }} pending={query.isPending}
         {...(query.error ? {error: errorMessage(query.error)} : {})} onRetry={() => { void query.refetch(); }} />}
-      files={<FilePanel session={active} onCollapse={() => { if (starting) setStartFilesOpen(false); else setShowFiles(false); }} onEdit={(session, entry) => { setHistoryActive(false); void editor.open(session, entry); }} />}
+      files={<FilePanel session={active} onCollapse={() => { if (starting) setStartFilesOpen(false); else setShowFiles(false); }} onEdit={(session, entry) => { setHistoryActive(false); void editor.open(session, entry); }}
+        {...(active && !activeAi && !activeTakeover ? {onTerminalDirectory: () => {
+          const runtime = getRuntime(active.id);
+          if (!runtime) return Promise.reject(new Error('当前终端不可用。'));
+          return runtime.requestWorkingDirectory();
+        }} : {terminalDirectoryReason: activeAi ? '当前显示独立 AI 终端，请切换到 SSH 标签后定位' : activeTakeover ? '请先将终端交回人工，再定位当前目录' : '请先打开已连接的 SSH 终端'})} />}
       footer={<IdeStatusbar active={active} mcpEnabled={Boolean(mcp.data?.enabled)}>{viewedAi && <HStack className="status-segment ai-status-segment" gap={1} vAlign="center"><Bot size="1em" /><Text>{viewedAi.mode === 'takeover' && viewedAi.status !== 'closed' ? 'AI 接管中' : viewedAi.status === 'running' ? 'AI 操作中' : 'AI 终端'} · {viewedAi.agentName}</Text></HStack>}</IdeStatusbar>}
       showServers={showServers} showFiles={filesVisible} serverWidth={startPanel.size} filesWidth={endPanel.size} serverResize={startPanel.props} filesResize={endPanel.props}>
       <VStack className="workspace-stack" height="100%" gap={0}>
@@ -349,7 +360,7 @@ export default function Workbench() {
               if (!session || session.status === 'closed' || session.status === 'error') return false;
               showTerminal(id); return true;
             }} />}
-          {sessions.map(session => { const runtime = getRuntime(session.id); return runtime ? <TerminalPane key={session.id} session={session} runtime={runtime} readOnly={takeovers.some(terminal => terminal.sessionId === session.id)} active={!historyActive && !activeAi && !editor.active && session.id === activeId} fontSize={fontSize}
+          {sessions.map(session => { const runtime = getRuntime(session.id); return runtime ? <TerminalPane key={session.id} session={session} runtime={runtime} readOnly={Boolean(session.directoryQueryPending) || takeovers.some(terminal => terminal.sessionId === session.id)} active={!historyActive && !activeAi && !editor.active && session.id === activeId} fontSize={fontSize}
             searchOpen={searchOpen} searchRequest={session.id === activeId ? searchRequest : 0} onCloseSearch={closeSearch} onOpenSearch={openSearch} onSaveSelection={saveSelection} /> : null; })}
           {aiTabs.map(info => <AiTerminalPane key={info.id} info={info} active={!historyActive && info.id === activeAiId} fontSize={fontSize}
             searchOpen={searchOpen} searchRequest={info.id === activeAiId ? searchRequest : 0} onOpenSearch={openSearch} onCloseSearch={closeSearch} />)}

@@ -4,7 +4,7 @@ import {Compartment, EditorState} from '@codemirror/state';
 import type {Extension} from '@codemirror/state';
 import {EditorView, keymap} from '@codemirror/view';
 import {defaultKeymap, indentWithTab, isolateHistory, redo, undo} from '@codemirror/commands';
-import {HighlightStyle, StreamLanguage, syntaxHighlighting} from '@codemirror/language';
+import {HighlightStyle, StreamLanguage, syntaxHighlighting, indentRange, indentUnit} from '@codemirror/language';
 import {openSearchPanel} from '@codemirror/search';
 import {MergeView} from '@codemirror/merge';
 import {tags} from '@lezer/highlight';
@@ -23,18 +23,21 @@ import {standardSQL} from '@codemirror/legacy-modes/mode/sql';
 import {StackItem} from '@astryxdesign/core/Stack';
 import {ContextMenu} from '@astryxdesign/core/ContextMenu';
 import {useToast} from '@astryxdesign/core/Toast';
-import {ClipboardPaste, Copy, Scissors, Search, TextSelect, Undo2, Redo2} from 'lucide-react';
+import {ClipboardPaste, Copy, Scissors, Search, TextSelect, Undo2, Redo2, WandSparkles} from 'lucide-react';
 import {MenuShortcut, openContextMenuFromKeyboard, useCopyText} from '../../shared/context-menu';
 import {errorMessage} from '../../shared/desktop';
+import {readClipboardText, writeClipboardText} from '../../shared/clipboard';
+import {assertFormatSize, formatJson, formatNginx, formatterForFile, formattingChanges} from './format-document';
+import type {FormatMode} from './format-document';
 
-export function languageName(name: string) {
+export function languageName(name: string, path = name) {
   const extension = name.split('.').pop()?.toLowerCase();
-  if (name.toLowerCase().includes('nginx')) return 'Nginx';
+  if (name.toLowerCase().includes('nginx') || /(?:^|\/)nginx(?:\/|$)/i.test(path)) return 'Nginx';
   const names: Record<string, string> = {json: 'JSON', js: 'JavaScript', jsx: 'JavaScript', ts: 'TypeScript', tsx: 'TypeScript', sh: 'Shell', bash: 'Shell', zsh: 'Shell', yml: 'YAML', yaml: 'YAML', ini: 'INI', conf: '配置', properties: '配置', env: '配置', css: 'CSS', html: 'HTML', xml: 'XML', svg: 'XML', py: 'Python', rs: 'Rust', sql: 'SQL', toml: 'TOML', md: 'Markdown'};
   return names[extension ?? ''] ?? '文本';
 }
-function language(name: string): Extension {
-  switch (languageName(name)) {
+function language(name: string, path: string): Extension {
+  switch (languageName(name, path)) {
     case 'JSON': return StreamLanguage.define(json);
     case 'JavaScript': return StreamLanguage.define(javascript);
     case 'TypeScript': return StreamLanguage.define(typescript);
@@ -71,8 +74,10 @@ const editorTheme = EditorView.theme({
   '.cm-panels, .cm-tooltip': {backgroundColor: 'var(--color-background-surface)', color: 'var(--color-text-primary)', borderColor: 'var(--color-border)', fontSize: 'var(--orbit-text-body)'},
   '.cm-textfield, .cm-button': {background: 'var(--color-background-body)', color: 'var(--color-text-primary)', border: 'thin solid var(--color-border)', fontSize: 'inherit'},
 });
-function extensions(name: string): Extension[] {
-  return [basicSetup, keymap.of([...defaultKeymap, indentWithTab]), language(name), syntaxHighlighting(highlight), editorTheme, EditorState.tabSize.of(2),
+function extensions(name: string, path = name): Extension[] {
+  const nginxFile = languageName(name, path) === 'Nginx';
+  return [basicSetup, keymap.of([...defaultKeymap, indentWithTab]), language(name, path), syntaxHighlighting(highlight), editorTheme,
+    EditorState.tabSize.of(nginxFile ? 4 : 2), indentUnit.of(nginxFile ? '    ' : '  '),
     EditorState.phrases.of({
       'Control character': '控制字符', 'Selection deleted': '选区已删除', 'Folded lines': '已折叠行', 'Unfolded lines': '已展开行',
       'to': '到', 'folded code': '已折叠代码', 'unfold': '展开', 'Fold line': '折叠行', 'Unfold line': '展开行',
@@ -84,22 +89,54 @@ function extensions(name: string): Extension[] {
   ];
 }
 
-interface Props {name: string; value: string; active: boolean; readOnly: boolean; findRequest: number; onChange: (content: string) => void; onCursor: (line: number, column: number) => void}
+interface Props {
+  name: string; path?: string; value: string; active: boolean; readOnly: boolean; findRequest: number;
+  onChange: (content: string) => void; onCursor: (line: number, column: number) => void;
+  formatRequest?: {id: number; mode: FormatMode}; onFormatFeedback?: (message: string, failed: boolean) => void;
+}
 type EditorContext = {view: EditorView; state: EditorState} | {field: HTMLInputElement | HTMLTextAreaElement; start: number; end: number; value: string};
-export function CodeEditor({name, value, active, readOnly, findRequest, onChange, onCursor}: Props) {
+export function CodeEditor({name, path = name, value, active, readOnly, findRequest, onChange, onCursor, formatRequest, onFormatFeedback}: Props) {
   const host = useRef<HTMLElement | null>(null);
   const view = useRef<EditorView | null>(null);
   const editability = useRef(new Compartment());
-  const callbacks = useRef({onChange, onCursor}); callbacks.current = {onChange, onCursor};
+  const callbacks = useRef({onChange, onCursor, onFormatFeedback}); callbacks.current = {onChange, onCursor, onFormatFeedback};
+  const formatting = useRef<(mode: FormatMode) => boolean>(() => false);
+  const lastFormatRequest = useRef(0);
   const context = useRef<EditorContext | null>(null);
   const [selection, setSelection] = useState(false);
   const [fieldMenu, setFieldMenu] = useState(false);
   const [contextReadOnly, setContextReadOnly] = useState(readOnly);
   const copy = useCopyText(); const toast = useToast();
+  formatting.current = mode => {
+    const editor = view.current;
+    if (!editor || readOnly || editor.state.readOnly) return false;
+    try {
+      const source = editor.state.doc.toString();
+      assertFormatSize(source);
+      const selected = mode === 'auto' ? formatterForFile(name, path, source) : mode;
+      if (selected === 'indent') {
+        const changes = indentRange(editor.state, 0, editor.state.doc.length);
+        if (!changes.empty) editor.dispatch({changes, annotations: isolateHistory.of('full'), userEvent: 'input.format'});
+        callbacks.current.onFormatFeedback?.(changes.empty ? '当前语言没有可调整的缩进；Nginx 或 JSON 可在格式化菜单中手动选择。' : '已整理当前语言的缩进，尚未保存；Ctrl + Z 可撤销。', false);
+      } else {
+        const formatted = selected === 'nginx' ? formatNginx(source) : formatJson(source);
+        const changes = formattingChanges(source, formatted);
+        if (changes.length) editor.dispatch({changes, annotations: isolateHistory.of('full'), userEvent: 'input.format'});
+        callbacks.current.onFormatFeedback?.(changes.length ? `已按 ${selected === 'nginx' ? 'Nginx' : 'JSON'} 格式化草稿，尚未保存；Ctrl + Z 可撤销。` : '格式已规整，草稿没有变化。', false);
+      }
+      editor.focus(); return true;
+    } catch (failure) {
+      const message = errorMessage(failure);
+      if (callbacks.current.onFormatFeedback) callbacks.current.onFormatFeedback(message, true);
+      else toast({type: 'error', body: message, uniqueID: 'editor-format'});
+      return true;
+    }
+  };
   useEffect(() => {
     if (!host.current) return;
     const editor = new EditorView({parent: host.current, state: EditorState.create({doc: value, extensions: [
-      ...extensions(name), editability.current.of(EditorState.readOnly.of(readOnly)),
+      keymap.of([{key: 'Alt-Shift-f', run: () => formatting.current('auto')}]),
+      ...extensions(name, path), editability.current.of(EditorState.readOnly.of(readOnly)),
       EditorView.contentAttributes.of({'aria-label': `编辑 ${name}`, spellcheck: 'false', 'data-orbit-code-input': 'true'}),
       EditorView.updateListener.of(update => {
         if (update.docChanged) callbacks.current.onChange(update.state.doc.toString());
@@ -113,7 +150,7 @@ export function CodeEditor({name, value, active, readOnly, findRequest, onChange
     return () => { view.current = null; editor.destroy(); };
     // The mounted view owns its undo history; draft, read-only and visibility update below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name]);
+  }, [name, path]);
   useEffect(() => {
     const editor = view.current;
     if (editor && editor.state.doc.toString() !== value) editor.dispatch({changes: {from: 0, to: editor.state.doc.length, insert: value}, annotations: isolateHistory.of('full')});
@@ -121,6 +158,11 @@ export function CodeEditor({name, value, active, readOnly, findRequest, onChange
   useEffect(() => { view.current?.dispatch({effects: editability.current.reconfigure(EditorState.readOnly.of(readOnly))}); }, [readOnly]);
   useEffect(() => { if (active) { view.current?.requestMeasure(); view.current?.focus(); } }, [active]);
   useEffect(() => { if (findRequest && active && view.current) openSearchPanel(view.current); }, [findRequest, active]);
+  useEffect(() => {
+    if (!formatRequest || !formatRequest.id || formatRequest.id === lastFormatRequest.current) return;
+    lastFormatRequest.current = formatRequest.id;
+    if (active && !readOnly) formatting.current(formatRequest.mode);
+  }, [formatRequest, active, readOnly]);
   const edit = async (action: 'copy' | 'cut' | 'paste') => {
     const saved = context.current;
     if (!saved) return;
@@ -128,9 +170,9 @@ export function CodeEditor({name, value, active, readOnly, findRequest, onChange
       // Search/replace fields belong to the editor view but retain ordinary input editing.
       if ('field' in saved) {
         const {field, start, end, value: original} = saved;
-        if (action !== 'paste') await navigator.clipboard.writeText(original.slice(start, end));
+        if (action !== 'paste') await writeClipboardText(original.slice(start, end));
         if (action === 'copy') return;
-        const text = action === 'paste' ? await navigator.clipboard.readText() : '';
+        const text = action === 'paste' ? await readClipboardText() : '';
         if (!field.isConnected || field.disabled || field.readOnly || field.value !== original) throw new Error('输入目标已变化，请重新右击后操作。');
         const insertion = field instanceof HTMLTextAreaElement ? text.replace(/\r\n?/g, '\n') : text.replace(/[\r\n]/g, '');
         const prototype = field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -145,8 +187,8 @@ export function CodeEditor({name, value, active, readOnly, findRequest, onChange
       const range = state.selection.main;
       if (action === 'copy') { await copy(state.sliceDoc(range.from, range.to)); return; }
       if (state.readOnly) return;
-      if (action === 'cut') await navigator.clipboard.writeText(state.sliceDoc(range.from, range.to));
-      const insertion = action === 'paste' ? await navigator.clipboard.readText() : '';
+      if (action === 'cut') await writeClipboardText(state.sliceDoc(range.from, range.to));
+      const insertion = action === 'paste' ? await readClipboardText() : '';
       if (view.current !== editor || editor.state !== state || editor.state.readOnly) throw new Error('编辑目标已变化，请重新右击后操作。');
       editor.dispatch(editor.state.replaceSelection(insertion)); editor.focus();
     } catch (failure) { toast({type: 'error', body: errorMessage(failure), uniqueID: 'editor-clipboard'}); }
@@ -176,18 +218,21 @@ export function CodeEditor({name, value, active, readOnly, findRequest, onChange
         const editor = view.current; if (editor) { editor.dispatch({selection: {anchor: 0, head: editor.state.doc.length}}); editor.focus(); }
       }},
       {type: 'divider'},
+      {label: '格式化文件', icon: <WandSparkles />, endContent: <MenuShortcut>Shift + Alt + F</MenuShortcut>, isDisabled: readOnly || fieldMenu, onClick: () => { formatting.current('auto'); }},
+      {label: '按 Nginx 配置格式化', isDisabled: readOnly || fieldMenu, onClick: () => { formatting.current('nginx'); }},
+      {label: '按 JSON 格式化', isDisabled: readOnly || fieldMenu, onClick: () => { formatting.current('json'); }},
       {label: '查找 / 替换', icon: <Search />, endContent: <MenuShortcut>Ctrl + F</MenuShortcut>, isDisabled: fieldMenu, onClick: () => { if (view.current) openSearchPanel(view.current); }},
     ]}><StackItem ref={host} size="fill" className="editor-code-host" /></ContextMenu>;
 }
 
-export function CodeComparison({name, original, current}: {name: string; original: string; current: string}) {
+export function CodeComparison({name, path = name, original, current}: {name: string; path?: string; original: string; current: string}) {
   const host = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (!host.current) return;
-    const readOnly = [...extensions(name), EditorState.readOnly.of(true)];
+    const readOnly = [...extensions(name, path), EditorState.readOnly.of(true)];
     const merge = new MergeView({parent: host.current, a: {doc: original, extensions: readOnly}, b: {doc: current, extensions: readOnly},
       gutter: true, highlightChanges: true, diffConfig: {scanLimit: 500, timeout: 1000}});
     return () => merge.destroy();
-  }, [name, original, current]);
+  }, [name, path, original, current]);
   return <StackItem ref={host} size="fill" className="editor-diff-host" aria-label="文件版本差异对比" />;
 }

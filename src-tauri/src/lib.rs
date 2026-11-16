@@ -11,6 +11,7 @@ mod desktop;
 mod recent;
 mod command_history;
 mod command_guard;
+mod clipboard;
 
 use anyhow::{anyhow, Context};
 use russh_sftp::protocol::OpenFlags;
@@ -386,6 +387,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![list_connections, save_connection, delete_connection, pick_private_key,
+            clipboard::clipboard_read_text, clipboard::clipboard_write_text,
             credential_status, save_connection_credential, forget_connection_credential,
             ssh_connect, ssh_write, ssh_resize, ssh_acknowledge, ssh_trust_host, ssh_disconnect,
             sftp_list, sftp_download, sftp_upload, mcp::mcp_status, mcp::mcp_set_enabled,
