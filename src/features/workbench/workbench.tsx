@@ -106,6 +106,7 @@ export default function Workbench() {
   const takeovers = aiWorkspace.terminals.filter(terminal => terminal.mode === 'takeover' && terminal.status !== 'closed' && terminal.status !== 'error');
   const activeAi = aiTabs.find(terminal => terminal.id === activeAiId) ?? null;
   const editor = useRemoteEditor();
+  // Ownership is live state for this session, never a persistent success notice.
   const activeTakeover = !editor.activeId && !activeAiId ? takeovers.find(terminal => terminal.sessionId === activeId) ?? null : null;
   const showTerminal = useCallback((id: string) => { setHistoryActive(false); setActiveAiId(null); editor.showTerminal(id); }, [editor.showTerminal]);
   const showAiTerminal = useCallback((id: string) => {
@@ -348,7 +349,7 @@ export default function Workbench() {
         {pendingProfile && location.pathname !== '/' && <Banner status="info" title="有连接正在等待登录" endContent={<Button label="前往登录" href="/" size="sm" />} />}
         {active && !historyActive && !activeAi && !editor.active && <SessionContextBar session={active} onSearch={openSearch} onReconnect={reconnect} onFiles={toggleFiles} aiControlled={Boolean(activeTakeover)} onTakeOverAi={setTakeoverSessionId} />}
         {activeTakeover && !historyActive && <HStack className="ai-takeover-toolbar" gap={2} vAlign="center"><Bot size="1em" /><Text maxLines={1}>AI 接管中 · {activeTakeover.agentName} · 人工输入已锁定</Text><StackItem size="fill" />
-          <Button label="交回人工" size="sm" onClick={() => { void desktopCommand('ai_release_session', {id: activeTakeover.id}).then(() => { setNotice('已交回人工，已发出的远端命令可能仍在运行。'); void aiFeed.refresh(); }).catch(error => setNotice(errorMessage(error))); }} /></HStack>}
+          <Button label="交回人工" tooltip="解除人工输入锁定；已发出的远端命令可能仍在运行" size="sm" onClick={() => { void desktopCommand('ai_release_session', {id: activeTakeover.id}).then(() => { void aiFeed.refresh(); }).catch(error => setNotice(errorMessage(error))); }} /></HStack>}
         <StackItem size="fill" className="terminal-area">
           {historyOpen && <CommandHistoryPane active={historyActive} findRequest={historyFind} />}
           {starting && <WorkspaceStart history={recent.data} pending={isDesktop && recent.isPending} historyError={recent.error ? errorMessage(recent.error) : recent.liveError}
@@ -378,7 +379,7 @@ export default function Workbench() {
     </IdeLayout>
     <Outlet />
     {takeoverSession && <AiTakeoverDialog key={takeoverSession.id} session={takeoverSession} onClose={() => setTakeoverSessionId(null)} onTakenOver={info => {
-      setTakeoverSessionId(null); showTerminal(info.sessionId); setNotice(`原终端已交给 ${info.agentName} 接管，人工输入已锁定。`);
+      setTakeoverSessionId(null); showTerminal(info.sessionId);
     }} />}
     {editor.documents.length > 0 && <Suspense fallback={null}><EditorDialogs controller={editor} /></Suspense>}
     {pendingHost && <HostKeyPrompt key={pendingHost.id} session={pendingHost} />}
