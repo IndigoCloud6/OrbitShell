@@ -78,7 +78,7 @@ export default function Workbench() {
   const query = useConnections();
   const recent = useRecentConnections();
   const {sessions, activeId, getRuntime, close, pendingProfile, dismissPending, launchError, clearLaunchError} = useSessions();
-  const {transfers, clearCompleted} = useTransfers();
+  const {transfers, records: transferRecords, warning: transferWarning, clearCompleted} = useTransfers();
   const {fontSize, setFontSize, showServers, setShowServers, showFiles, setShowFiles} = usePreferences();
   const theme = useThemePreference();
   const [notice, setNotice] = useState('');
@@ -373,7 +373,7 @@ export default function Workbench() {
         {!historyActive && !activeAi && active?.status === 'closed' && <Banner className="compact-feedback" status="info" title="连接已断开" endContent={<Button label="重新连接" size="sm" onClick={reconnect} />} />}
         {!historyActive && !activeAi && active?.status === 'error' && <Banner className="compact-feedback" status="error" title="连接失败" description={active.message}
           endContent={<Button label="重新连接" size="sm" onClick={reconnect} />} />}
-        <WorkspaceTools transfers={transfers} logs={logs} tab={toolTab} open={toolsOpen} onTab={openTool} onToggle={() => setToolsOpen(!toolsOpen)} onClear={clearCompleted} ai={ai} commands={<QuickCommandPanel readOnly={historyActive || Boolean(activeAi || activeTakeover)} onLocateTerminal={showTerminal} />} />
+        <WorkspaceTools transfers={transfers} records={transferRecords} transferWarning={transferWarning} logs={logs} tab={toolTab} open={toolsOpen} onTab={openTool} onToggle={() => setToolsOpen(!toolsOpen)} onClear={clearCompleted} ai={ai} commands={<QuickCommandPanel readOnly={historyActive || Boolean(activeAi || activeTakeover)} onLocateTerminal={showTerminal} />} />
       </VStack>
     </IdeLayout>
     <Outlet />

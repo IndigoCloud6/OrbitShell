@@ -10,6 +10,9 @@ const descriptions: Record<string, string> = {
   read_output: '读取绑定终端输出，接管模式读取原标签保留的缓冲',
   take_over_session: '接管已登录的原标签，复用同一 PTY 并锁定人工输入',
   release_session: '交回人工，停止接管权限，不自动终止远端命令',
+  upload_file: 'AI 指定本机文件和远程目录，通过 SFTP 上传，不覆盖同名文件',
+  download_file: 'AI 指定远程文件和本机保存路径，通过 SFTP 下载，不覆盖已有文件',
+  get_file_transfer: '查询传输进度、路径、大小、时间和最终结果',
   disconnect: '断开指定会话',
 };
 

@@ -69,6 +69,7 @@ pub fn shutdown(app: &AppHandle) {
     let _ = state.history.flush();
     state.mcp_epoch.fetch_add(1, Ordering::AcqRel);
     state.mcp_enabled.store(false, Ordering::Release);
+    state.transfers.stop_mcp();
     state.ai.stop(app);
     if let Ok(sessions) = state.sessions.lock() { for session in sessions.values() { session.cancel.cancel(); } }
     if let Ok(mut runtime) = state.mcp_runtime.try_lock() { if let Some(server) = runtime.take() { server.stop(); } };

@@ -12,15 +12,17 @@ mod recent;
 mod command_history;
 mod command_guard;
 mod clipboard;
+mod sftp_transfer;
+mod file_transfers;
 
 use anyhow::{anyhow, Context};
-use russh_sftp::protocol::OpenFlags;
+use sftp_transfer::TransferProgress;
 use serde::Serialize;
 use ssh::{ConnectRequest, LiveSession, SessionCommand, SessionEvent, SessionEvents, OutputBuffer};
 use std::{collections::HashMap, sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64}}, time::Duration};
 use storage::{ConnectionProfile, Storage};
 use tauri::{ipc::Channel, AppHandle, Manager, State};
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, sync::{mpsc, OnceCell}, time::timeout};
+use tokio::{sync::{mpsc, OnceCell}, time::timeout};
 use tokio_util::sync::CancellationToken;
 
 pub struct AppState {
@@ -37,6 +39,7 @@ pub struct AppState {
     editor: remote_editor::EditorStore,
     desktop: desktop::DesktopState,
     recent: recent::RecentState,
+    transfers: file_transfers::Transfers,
 }
 
 impl AppState {
@@ -237,83 +240,36 @@ async fn sftp_list(session_id: String, path: String, state: State<'_, AppState>)
 #[serde(rename_all = "camelCase")]
 struct TransferResult { name: String, bytes: u64 }
 
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TransferProgress { name: String, bytes: u64, total: Option<u64> }
-
-async fn copy_with_progress<R, W>(source: &mut R, destination: &mut W, name: &str, total: Option<u64>, progress: &Channel<TransferProgress>) -> std::io::Result<u64>
-where R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite + Unpin {
-    let mut buffer = vec![0u8; 64 * 1024];
-    let mut bytes = 0u64;
-    let mut last = std::time::Instant::now();
-    let report = |bytes| { let _ = progress.send(TransferProgress {name: name.to_owned(), bytes, total}); };
-    report(0);
-    loop {
-        let count = source.read(&mut buffer).await?;
-        if count == 0 { break; }
-        destination.write_all(&buffer[..count]).await?;
-        bytes += count as u64;
-        if last.elapsed() >= Duration::from_millis(100) { report(bytes); last = std::time::Instant::now(); }
-    }
-    report(bytes);
-    Ok(bytes)
-}
-
 #[tauri::command]
-async fn sftp_download(session_id: String, path: String, progress: Channel<TransferProgress>, state: State<'_, AppState>) -> Result<Option<TransferResult>, String> {
+async fn sftp_download(session_id: String, transfer_id: String, path: String, progress: Channel<TransferProgress>, app: AppHandle, state: State<'_, AppState>) -> Result<Option<TransferResult>, String> {
     let live = state.session(&session_id)?;
     let name = path.rsplit('/').next().filter(|name| !name.is_empty()).ok_or("文件路径无效")?.to_owned();
     let Some(destination) = rfd::AsyncFileDialog::new().set_title("下载远程文件").set_file_name(&name).save_file().await else { return Ok(None); };
-    let result = tokio::select! {
-        _ = live.cancel.cancelled() => Err(anyhow!("连接已关闭，下载已停止")),
-        result = async {
-            let sftp = live.sftp().await?;
-            let mut source = sftp.open(&path).await?;
-            let total = source.metadata().await.ok().map(|metadata| metadata.len());
-            let parent = destination.path().parent().ok_or_else(|| anyhow!("保存目录无效"))?;
-            let temporary = tempfile::NamedTempFile::new_in(parent)?;
-            let mut output = tokio::fs::File::from_std(temporary.reopen()?);
-            let bytes = copy_with_progress(&mut source, &mut output, &name, total, &progress).await?;
-            output.flush().await?;
-            output.sync_all().await?;
-            drop(output);
-            source.close().await?;
-            temporary.persist(destination.path())?;
-            Ok::<_, anyhow::Error>(Some(TransferResult { name, bytes }))
-        } => result,
-    };
-    result.map_err(|error| format!("下载失败：{error:#}"))
+    let task = state.transfers.manual(&app, transfer_id, &live, &session_id, file_transfers::Direction::Download,
+        name, destination.path().to_string_lossy().into_owned(), path.clone())?;
+    let cancel = CancellationToken::new();
+    let result = sftp_transfer::download(&live, &path, destination.path(), true, |event| {
+        task.progress(&app, event.clone()); let _ = progress.send(event);
+    }, &cancel).await;
+    state.transfers.finish(&app, &task, &live, &result);
+    result.map(|outcome| Some(TransferResult { name: outcome.name, bytes: outcome.bytes }))
+        .map_err(|error| format!("下载失败：{error:#}"))
 }
 
 #[tauri::command]
-async fn sftp_upload(session_id: String, directory: String, progress: Channel<TransferProgress>, state: State<'_, AppState>) -> Result<Option<TransferResult>, String> {
+async fn sftp_upload(session_id: String, transfer_id: String, directory: String, progress: Channel<TransferProgress>, app: AppHandle, state: State<'_, AppState>) -> Result<Option<TransferResult>, String> {
     let live = state.session(&session_id)?;
     let Some(source) = rfd::AsyncFileDialog::new().set_title("上传文件到远程目录").pick_file().await else { return Ok(None); };
-    let name = source.path().file_name().ok_or("文件名无效")?.to_string_lossy().into_owned();
-    let result = tokio::select! {
-        _ = live.cancel.cancelled() => Err(anyhow!("连接已关闭，上传已停止")),
-        result = async {
-            let sftp = live.sftp().await?;
-            let directory = sftp.canonicalize(directory).await?;
-            let path = format!("{}/{name}", directory.trim_end_matches('/'));
-            let mut input = tokio::fs::File::open(source.path()).await?;
-            let total = Some(input.metadata().await?.len());
-            // Exclusive create preserves existing remote files.
-            let mut output = sftp.open_with_flags(&path, OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE).await
-                .context("无法创建远程文件；若存在同名文件，请先重命名")?;
-            let result = async {
-                let bytes = copy_with_progress(&mut input, &mut output, &name, total, &progress).await?;
-                output.flush().await?;
-                output.close().await?;
-                Ok::<_, anyhow::Error>(bytes)
-            }.await;
-            match result {
-                Ok(bytes) => Ok(Some(TransferResult { name, bytes })),
-                Err(error) => { let _ = sftp.remove_file(path).await; Err(error) }
-            }
-        } => result,
-    };
-    result.map_err(|error| format!("上传失败：{error:#}"))
+    let name = source.path().file_name().and_then(|name| name.to_str()).ok_or("文件名无效")?.to_owned();
+    let task = state.transfers.manual(&app, transfer_id, &live, &session_id, file_transfers::Direction::Upload,
+        name.clone(), source.path().to_string_lossy().into_owned(), format!("{}/{name}", directory.trim_end_matches('/')))?;
+    let cancel = CancellationToken::new();
+    let result = sftp_transfer::upload(&live, source.path(), &directory, &name, |event| {
+        task.progress(&app, event.clone()); let _ = progress.send(event);
+    }, &cancel).await;
+    state.transfers.finish(&app, &task, &live, &result);
+    result.map(|outcome| Some(TransferResult { name: outcome.name, bytes: outcome.bytes }))
+        .map_err(|error| format!("上传失败：{error:#}"))
 }
 
 pub fn run() {
@@ -341,7 +297,7 @@ pub fn run() {
                 store.desktop.close_to_tray
             };
             app.manage(AppState { storage, sessions: Mutex::new(HashMap::new()), launches: Mutex::new(Vec::new()),
-                mcp_enabled: AtomicBool::new(false), mcp_epoch: AtomicU64::new(0), mcp_runtime: tokio::sync::Mutex::new(None), mcp_startup_error: Mutex::new(None), history, executions: executions::ExecutionStore::default(), ai: ai_terminals::AiTerminals::default(), editor: remote_editor::EditorStore::default(), desktop: desktop::DesktopState::new(close_to_tray), recent: recent::RecentState::default() });
+                mcp_enabled: AtomicBool::new(false), mcp_epoch: AtomicU64::new(0), mcp_runtime: tokio::sync::Mutex::new(None), mcp_startup_error: Mutex::new(None), history, executions: executions::ExecutionStore::default(), ai: ai_terminals::AiTerminals::default(), editor: remote_editor::EditorStore::default(), desktop: desktop::DesktopState::new(close_to_tray), recent: recent::RecentState::default(), transfers: file_transfers::Transfers::open(app.path().app_data_dir()?) });
             if mcp_auto_start {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -391,6 +347,7 @@ pub fn run() {
             credential_status, save_connection_credential, forget_connection_credential,
             ssh_connect, ssh_write, ssh_resize, ssh_acknowledge, ssh_trust_host, ssh_disconnect,
             sftp_list, sftp_download, sftp_upload, mcp::mcp_status, mcp::mcp_set_enabled,
+            file_transfers::file_transfer_list,
             remote_editor::editor_open, remote_editor::editor_read, remote_editor::editor_save, remote_editor::editor_close,
             remote_editor::editor_snapshots, remote_editor::editor_snapshot_read,
             desktop::desktop_status, desktop::desktop_set_close_to_tray, desktop::desktop_close_window, desktop::desktop_hide_window,

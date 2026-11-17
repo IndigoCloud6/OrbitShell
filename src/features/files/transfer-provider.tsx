@@ -1,28 +1,70 @@
-import {createContext, useCallback, useContext, useState} from 'react';
+import {createContext, useCallback, useContext, useEffect, useRef, useState} from 'react';
 import type {ReactNode} from 'react';
 import {Channel} from '@tauri-apps/api/core';
-import {desktopCommand, errorMessage} from '../../shared/desktop';
+import {listen} from '@tauri-apps/api/event';
+import {useQuery, useQueryClient} from '@tanstack/react-query';
+import {desktopCommand, errorMessage, isDesktop} from '../../shared/desktop';
 
 export interface Transfer extends Record<string, unknown> {
   id: string; name: string; direction: 'upload' | 'download';
-  status: 'choosing' | 'running' | 'done' | 'error';
+  status: 'choosing' | 'running' | 'done' | 'error' | 'cancelled';
   bytes: number; total: number | null; speed: number; message: string;
+  agentId?: string | null; agentName?: string | null; sessionId?: string; sessionName?: string;
+  hostname?: string; port?: number; temporary?: boolean; restored?: boolean;
+  localPath?: string; remotePath?: string; createdAt?: number; finishedAt?: number | null; elapsedMs?: number;
 }
+interface Snapshot {records: Transfer[]; warning: string | null}
+const transferKey = ['file-transfers'] as const;
+function active(row: Transfer) { return row.status === 'choosing' || row.status === 'running'; }
 interface Progress {name: string; bytes: number; total: number | null}
 interface TransferResult {name: string; bytes: number}
 interface Request {sessionId: string; direction: 'upload' | 'download'; path: string; name?: string}
-interface ContextValue {transfers: Transfer[]; run: (request: Request) => Promise<boolean>; clearCompleted: () => void}
+interface ContextValue {transfers: Transfer[]; records: Transfer[]; warning: string; run: (request: Request) => Promise<boolean>; clearCompleted: () => void}
 const Context = createContext<ContextValue | null>(null);
 
 export function TransferProvider({children}: {children: ReactNode}) {
   const [transfers, setTransfers] = useState<Transfer[]>([]);
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
+  const [feedError, setFeedError] = useState('');
+  const completed = useRef(new Set<string>());
+  const queryClient = useQueryClient();
+  const history = useQuery({queryKey: transferKey, enabled: isDesktop,
+    queryFn: () => desktopCommand<Snapshot>('file_transfer_list'), retry: false, refetchOnWindowFocus: true,
+    refetchInterval: query => query.state.data?.records.some(active) ? 2000 : false, refetchIntervalInBackground: true});
+  useEffect(() => {
+    if (!isDesktop) return;
+    let disposed = false;
+    let off: (() => void) | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = () => { void queryClient.invalidateQueries({queryKey: transferKey}); };
+    void listen('orbitshell:file-transfers-changed', () => {
+      if (disposed || timer) return;
+      timer = setTimeout(() => { timer = undefined; if (!disposed) refresh(); }, 100);
+    }).then(unlisten => {
+      if (disposed) unlisten(); else { off = unlisten; setFeedError(''); refresh(); }
+    }).catch(error => { if (!disposed) setFeedError(errorMessage(error)); });
+    return () => { disposed = true; off?.(); if (timer) clearTimeout(timer); };
+  }, [queryClient]);
+  useEffect(() => {
+    const rows = history.data?.records;
+    if (!rows) return;
+    const ids = new Set(rows.map(row => row.id));
+    setTransfers(previous => previous.some(row => ids.has(row.id)) ? previous.filter(row => !ids.has(row.id)) : previous);
+    for (const row of rows) {
+      if (row.status === 'done' && row.direction === 'upload' && !row.restored && row.sessionId && !completed.current.has(row.id)) {
+        // Invalidate only the originating session, never whichever host is currently selected.
+        void queryClient.invalidateQueries({queryKey: ['remote-directory', row.sessionId]});
+      }
+    }
+    completed.current = new Set(rows.filter(row => row.status === 'done').map(row => row.id));
+  }, [history.data, queryClient]);
   const run = useCallback(async (request: Request) => {
     const id = crypto.randomUUID();
     let sampleAt = performance.now();
     let sampleBytes = 0;
     setTransfers(previous => [...previous.filter(row => row.status === 'choosing' || row.status === 'running'),
       ...previous.filter(row => row.status !== 'choosing' && row.status !== 'running').slice(-19),
-      {id, name: request.name ?? '选择上传文件…', direction: request.direction, status: 'choosing', bytes: 0, total: null, speed: 0, message: '等待选择文件'}]);
+      {id, name: request.name ?? '选择上传文件…', direction: request.direction, status: 'choosing', bytes: 0, total: null, speed: 0, message: '等待选择文件', sessionId: request.sessionId, createdAt: Date.now()}]);
     const progress = new Channel<Progress>();
     progress.onmessage = event => {
       const now = performance.now();
@@ -32,7 +74,7 @@ export function TransferProvider({children}: {children: ReactNode}) {
     };
     try {
       const result = await desktopCommand<TransferResult | null>(request.direction === 'upload' ? 'sftp_upload' : 'sftp_download',
-        request.direction === 'upload' ? {sessionId: request.sessionId, directory: request.path, progress} : {sessionId: request.sessionId, path: request.path, progress});
+        request.direction === 'upload' ? {sessionId: request.sessionId, transferId: id, directory: request.path, progress} : {sessionId: request.sessionId, transferId: id, path: request.path, progress});
       if (!result) { setTransfers(previous => previous.filter(row => row.id !== id)); return false; }
       setTransfers(previous => previous.map(row => row.id === id ? {...row, name: result.name, bytes: result.bytes, total: result.bytes, status: 'done', message: '已完成'} : row));
       return true;
@@ -41,8 +83,18 @@ export function TransferProvider({children}: {children: ReactNode}) {
       return false;
     }
   }, []);
-  const clearCompleted = useCallback(() => setTransfers(previous => previous.filter(row => row.status === 'running' || row.status === 'choosing')), []);
-  return <Context value={{transfers, run, clearCompleted}}>{children}</Context>;
+  const native = history.data?.records ?? [];
+  const nativeIds = new Set(native.map(row => row.id));
+  const records = [...native, ...transfers.filter(row => !nativeIds.has(row.id))].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+  const visible = records.filter(row => active(row) || (!row.restored && !hidden.has(row.id)));
+  const queue = [...visible.filter(active), ...visible.filter(row => !active(row)).slice(-20)];
+  const clearCompleted = () => {
+    // Clearing the queue does not erase persisted transfer history or touch any files.
+    setHidden(new Set(records.filter(row => !active(row)).map(row => row.id)));
+    setTransfers(previous => previous.filter(active));
+  };
+  const warning = [history.error ? errorMessage(history.error) : '', history.data?.warning, feedError].filter(Boolean).join('；');
+  return <Context value={{transfers: queue, records, warning, run, clearCompleted}}>{children}</Context>;
 }
 
 export function useTransfers() {

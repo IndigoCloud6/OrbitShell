@@ -1,3 +1,4 @@
+import {useState} from 'react';
 import type {ReactNode} from 'react';
 import {HStack, VStack, StackItem} from '@astryxdesign/core/Stack';
 import {Text} from '@astryxdesign/core/Text';
@@ -5,17 +6,21 @@ import {Button} from '@astryxdesign/core/Button';
 import {IconButton} from '@astryxdesign/core/IconButton';
 import {Table, proportional, pixel} from '@astryxdesign/core/Table';
 import {ProgressBar} from '@astryxdesign/core/ProgressBar';
+import {Banner} from '@astryxdesign/core/Banner';
 import {ResizeHandle, useResizable} from '@astryxdesign/core/Resizable';
 import {ChevronDown, ChevronUp, ArrowUp, ArrowDown, File, CheckCircle2, CircleAlert} from 'lucide-react';
 import {formatBytes} from '../files/file-utils';
 import type {Transfer} from '../files/transfer-provider';
+import {TransferHistoryDialog} from '../files/transfer-history';
 import type {ToolTab} from './ide-chrome';
 
 export interface ConnectionLog extends Record<string, unknown> {id: string; time: string; name: string; message: string}
-export function WorkspaceTools({transfers, logs, tab, open, onTab, onToggle, onClear, ai, commands}: {
+export function WorkspaceTools({transfers, records = transfers, transferWarning = '', logs, tab, open, onTab, onToggle, onClear, ai, commands}: {
   transfers: Transfer[]; logs: ConnectionLog[]; tab: ToolTab; open: boolean;
+  records?: Transfer[]; transferWarning?: string;
   onTab: (tab: ToolTab) => void; onToggle: () => void; onClear: () => void; ai: ReactNode; commands?: ReactNode;
 }) {
+  const [historyOpen, setHistoryOpen] = useState(false);
   // One size for the whole dock, independent of the active tab and its contents.
   // Keep the controller mounted while collapsed so reopening restores this size.
   // Start the revised preference at 200px instead of restoring the old tall dock.
@@ -33,18 +38,21 @@ export function WorkspaceTools({transfers, logs, tab, open, onTab, onToggle, onC
         <Button className="tool-tab" data-active={String(tab === 'commands')} label="快捷指令" role="tab" aria-selected={tab === 'commands'} aria-controls="tool-commands" variant="ghost" onClick={() => onTab('commands')} />
       </HStack>
       <StackItem size="fill" />
-      {tab === 'transfers' && transfers.some(row => row.status === 'done' || row.status === 'error') && <Button label="清理已完成" className="clear-transfers" size="sm" variant="ghost" onClick={onClear} />}
+      {tab === 'transfers' && <Button label="传输记录" className="clear-transfers" size="sm" variant="ghost" onClick={() => setHistoryOpen(true)} />}
+      {tab === 'transfers' && transfers.some(row => row.status === 'done' || row.status === 'error' || row.status === 'cancelled') && <Button label="清理已完成" tooltip="仅收起队列中的已结束任务，不删除传输历史或文件" className="clear-transfers" size="sm" variant="ghost" onClick={onClear} />}
       <IconButton label={open ? '折叠工具面板' : '展开工具面板'} tooltip={open ? '折叠工具面板' : '展开工具面板'} className="tools-collapse" variant="ghost" size="sm" icon={open ? <ChevronDown /> : <ChevronUp />} onClick={onToggle} />
     </HStack>
     {open && <StackItem className="tools-content" size="fill" isScrollable>
       {tab === 'transfers' && <VStack id="tool-transfers" role="tabpanel" className="transfer-table-wrap" gap={0}>
+        {transferWarning && <Banner className="compact-feedback" status="warning" title="传输记录提示" description={transferWarning} />}
         {transfers.length ? <Table<Transfer> className="transfer-table" data={transfers} idKey="id" density="compact" dividers="rows" textOverflow="truncate"
           columns={[
-            {key: 'name', header: '文件', width: proportional(1.8, {minWidth: 160}), renderCell: row => <HStack gap={2} vAlign="center"><File className="transfer-file-icon" /><Text maxLines={1}>{row.name}</Text></HStack>},
+            {key: 'name', header: '文件', width: proportional(1.8, {minWidth: 160}), renderCell: row => <HStack gap={2} vAlign="center"><File className="transfer-file-icon" /><Text maxLines={1} hasTruncateTooltip>{row.agentId ? `AI · ${row.agentName || 'Agent'} · ` : ''}{row.sessionName ? `${row.sessionName} · ` : ''}{row.name}</Text></HStack>},
             {key: 'direction', header: '方向', width: pixel(104), renderCell: row => <HStack gap={2} vAlign="center">{row.direction === 'upload' ? <ArrowUp size="1em" /> : <ArrowDown size="1em" />}<Text>{row.direction === 'upload' ? '上传' : '下载'}</Text></HStack>},
             {key: 'progress', header: '进度', width: proportional(1.35, {minWidth: 150}), renderCell: row => row.status === 'done' ?
               <HStack gap={2} vAlign="center" className="success-icon"><CheckCircle2 size="1.1em" /><Text>已完成</Text></HStack> :
               row.status === 'error' ? <HStack gap={2} vAlign="center" className="error-icon"><CircleAlert size="1em" /><Text>失败</Text></HStack> :
+              row.status === 'cancelled' ? <Text color="secondary">已停止</Text> :
               <HStack className="transfer-progress" gap={2} vAlign="center"><StackItem size="fill"><ProgressBar label={`${row.name}传输进度`} isLabelHidden value={row.total !== null && row.total > 0 ? row.bytes / row.total * 100 : 0} isIndeterminate={row.total === null} /></StackItem>
                 <Text hasTabularNumbers>{row.total === null ? '—' : `${row.total > 0 ? Math.floor(row.bytes / row.total * 100) : 0}%`}</Text></HStack>},
             {key: 'bytes', header: '大小', width: proportional(1.5, {minWidth: 160}), renderCell: row => <Text maxLines={1} hasTabularNumbers>{row.status === 'done' ? formatBytes(row.bytes) : row.total !== null ? `${formatBytes(row.bytes)} / ${formatBytes(row.total)}` : `${formatBytes(row.bytes)} / 总大小未知`}</Text>},
@@ -62,5 +70,6 @@ export function WorkspaceTools({transfers, logs, tab, open, onTab, onToggle, onC
       {tab === 'commands' && <VStack id="tool-commands" role="tabpanel" className="quick-tools" height="100%" gap={0}>{commands ?? <Text className="tools-empty">本页面为隔离设计场景，未加载真实快捷指令。</Text>}</VStack>}
     </StackItem>}
     </VStack>
+    <TransferHistoryDialog open={historyOpen} records={records} warning={transferWarning} onClose={() => setHistoryOpen(false)} />
   </>;
 }

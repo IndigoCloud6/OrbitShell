@@ -433,6 +433,10 @@
   .workspace-tools :is(.transfer-table, .connection-log-table, .execution-table, .quick-table) :where(th, td) :where(span, p, button) { font-size: inherit; line-height: inherit; }
   .transfer-file-icon { width: calc(var(--orbit-unit) * 1.2); height: calc(var(--orbit-unit) * 1.35); stroke-width: 1.4; }
   .transfer-progress { min-width: 0; }
+  .transfer-history-table-region { min-width: 0; max-height: calc(var(--orbit-unit) * 34); }
+  .transfer-history-table { width: 100%; font-size: var(--orbit-tools-text-body); }
+  .transfer-record-button { justify-content: flex-start; width: 100%; min-width: 0; padding-inline: 0; font-weight: 400; }
+  .transfer-record-path { overflow-wrap: anywhere; white-space: pre-wrap; }
   .tools-empty { display: block; padding: calc(var(--orbit-unit) * 1.25); font-size: var(--orbit-tools-text-body); }
   .tools-note { display: block; padding: calc(var(--orbit-unit) * .5) calc(var(--orbit-unit) * .875); border-top: thin solid var(--color-border); font-size: var(--orbit-tools-text-meta); }
   .clear-transfers { font-size: var(--orbit-tools-text-meta); color: var(--color-text-secondary); }

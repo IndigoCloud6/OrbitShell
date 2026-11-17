@@ -130,6 +130,11 @@ struct Entries { agents: Vec<Agent>, terminals: Vec<Arc<AiTerminal>> }
 pub struct AiTerminals { entries: Mutex<Entries>, revision: AtomicU64, active_session: Mutex<Option<String>> }
 
 impl AiTerminals {
+    pub fn agent_name(&self, id: &str) -> Result<String, String> {
+        self.entries.lock().map_err(|_| "Agent 状态不可用")?.agents.iter()
+            .find(|agent| agent.id == id && agent.connected).map(|agent| agent.name.clone())
+            .ok_or_else(|| "MCP 客户端尚未初始化或已经断开".into())
+    }
     pub fn active_session(&self) -> Option<String> { self.active_session.lock().ok().and_then(|id| id.clone()) }
     fn notify(&self, app: &AppHandle, output_id: Option<&str>) {
         let revision = self.revision.fetch_add(1, Ordering::Relaxed) + 1;
