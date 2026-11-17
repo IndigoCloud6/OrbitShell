@@ -1,4 +1,4 @@
-use crate::{ssh::{ConnectRequest, SessionEvents}, AppState, start_session};
+use crate::{credentials, ssh::{ConnectRequest, SessionEvents}, storage::ConnectionProfile, AppState, start_session};
 use axum::{Router, extract::State, http::{Request, StatusCode}, middleware::{self, Next}, response::Response};
 use rmcp::{
     ErrorData as McpError, ServerHandler, RoleServer,
@@ -9,15 +9,18 @@ use rmcp::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::{Arc, Mutex, atomic::Ordering};
 use subtle::ConstantTimeEq;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 const PORT: u16 = 43123;
 const CONTROL_PROTOCOL: &str = "orbitshell-terminal-control/3";
+// Serialize MCP connection requests so retries can reuse the session announced
+// by the preceding call instead of racing to start another SSH connection.
+static CONNECTION_REQUESTS: Mutex<()> = Mutex::new(());
 
 fn registered_tool_names() -> Vec<String> {
     OrbitTools::tool_router().list_all().into_iter().map(|tool| tool.name.to_string()).collect()
@@ -138,7 +141,7 @@ impl Drop for AgentLease {
 struct OpenArgs {
     /// Saved connection identifier from list_connections.
     connection_id: String,
-    /// Optional one-time password or key passphrase. Omit to request authentication in the OrbitShell window.
+    /// Optional one-time password or key passphrase. Omit to reuse an existing session or use credentials saved locally in OrbitShell; the desktop requests login only when no saved credential is available. Saved secrets are never returned to the Agent.
     credential: Option<String>,
 }
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -265,6 +268,13 @@ impl OrbitTools {
         Ok(())
     }
 
+    fn request_credentials(&self, profile: &ConnectionProfile, reason: &str, message: &str) -> Result<CallToolResult, McpError> {
+        self.app.emit_to("main", "orbitshell:request-credentials", profile).map_err(failure)?;
+        result(json!({"state": "awaiting_user_authentication", "connectionId": profile.id,
+            "reason": reason, "message": message,
+            "nextStep": "请在 OrbitShell 桌面完成登录或处理凭据问题，然后轮询 list_sessions。不要要求用户通过聊天发送已保存的密码或私钥口令。"}))
+    }
+
     fn takeover_receipt(&self, session_id: Option<&str>) -> Result<Value, McpError> {
         let state = self.app.state::<AppState>();
         let session_id = session_id.map(str::to_owned).or_else(|| state.ai.active_session()).ok_or_else(|| failure("当前未选中人工终端，请明确指定 list_sessions 中的 session_id"))?;
@@ -320,22 +330,50 @@ impl OrbitTools {
                 "note": "serverToolNames 是服务端真实路由，不等于宿主已绑定的函数。宿主函数缺失不代表服务端拒绝注册；若 action 参数也被过滤，使用桌面接管入口或刷新宿主工具清单，不新开 PTY 替代。"}}))
     }
 
-    #[tool(description = "Open a saved SSH connection in the visible OrbitShell workspace. Without a credential, requests login in the desktop UI. Unknown host fingerprints always require user confirmation in the UI. Poll list_sessions until connected.")]
+    #[tool(description = "Open a saved SSH connection in the visible OrbitShell workspace. Omit credential to first reuse a matching connected/in-progress session, or start SSH with credentials already saved in the local OS vault; saved passwords/passphrases are never returned to the Agent and require no extra Connect click. Only missing/unavailable saved credentials request desktop login. Do not ask users to send saved secrets in chat. Explicit credential supplies a one-time secret for a new connection. Unknown host fingerprints still require desktop confirmation. Poll list_sessions using the returned sessionId until connected; do not repeat open_connection while it is connecting. Opening/reusing SSH does not take over the original terminal: use take_over_session separately when authorized.")]
     fn open_connection(&self, Parameters(args): Parameters<OpenArgs>) -> Result<CallToolResult, McpError> {
+        let supplied_credential = args.credential.is_some();
+        let mut credential = Zeroizing::new(args.credential.unwrap_or_default());
+        let _request = CONNECTION_REQUESTS.lock().map_err(|_| failure("连接请求状态不可用"))?;
         self.ensure_enabled()?;
         let profile = {
             let state = self.app.state::<AppState>();
             let store = state.storage.store.lock().map_err(failure)?;
             store.connections.iter().find(|profile| profile.id == args.connection_id).cloned().ok_or_else(|| failure("Connection not found"))?
         };
-        let Some(credential) = args.credential else {
-            self.app.emit_to("main", "orbitshell:request-credentials", &profile).map_err(failure)?;
-            return result(json!({"state": "awaiting_user_authentication", "connectionId": profile.id}));
-        };
+        if !supplied_credential {
+            let state = self.app.state::<AppState>();
+            let active_id = state.ai.active_session();
+            let existing = {
+                let sessions = state.sessions.lock().map_err(failure)?;
+                sessions.iter().filter(|(_, session)| !session.is_temporary &&
+                    credentials::same_identity(&session.profile, &profile) &&
+                    !session.cancel.is_cancelled() && !session.commands.is_closed())
+                    .max_by_key(|(id, session)| (session.connected.load(Ordering::Acquire), active_id.as_deref() == Some(id.as_str())))
+                    .map(|(id, session)| (id.clone(), session.connected.load(Ordering::Acquire)))
+            };
+            if let Some((id, connected)) = existing {
+                return result(json!({"state": if connected { "connected" } else { "connecting" },
+                    "connectionId": profile.id, "sessionId": id, "reused": true,
+                    "note": "复用已有 SSH 会话，未接管原终端。正在连接时继续轮询 list_sessions；若等待首次主机指纹确认，请在桌面处理。"}));
+            }
+            // Probe only availability here. start_session loads the secret again
+            // against the current profile identity; the probe's zeroizing value
+            // is dropped locally and never placed in a tool response.
+            match credentials::load(&profile) {
+                Ok(Some(_)) => {},
+                Ok(None) => return self.request_credentials(&profile, "credentials_missing", "本机没有此连接可用的已保存凭据，需要在桌面完成登录。"),
+                Err(message) => return self.request_credentials(&profile, "credentials_unavailable", &message),
+            }
+        }
         let id = Uuid::new_v4().to_string();
-        let request = ConnectRequest { session_id: id.clone(), profile_id: profile.id, profile: None, credential, use_saved_credential: false, remember_credential: false, columns: 120, rows: 36 };
+        let request = ConnectRequest { session_id: id.clone(), profile_id: profile.id.clone(), profile: None,
+            credential: std::mem::take(&mut *credential), use_saved_credential: !supplied_credential,
+            remember_credential: false, columns: 120, rows: 36 };
         start_session(self.app.clone(), request, SessionEvents::broadcast(self.app.clone(), id.clone())).map_err(failure)?;
-        result(json!({"state": "connecting", "sessionId": id}))
+        result(json!({"state": "connecting", "connectionId": profile.id, "sessionId": id, "reused": false,
+            "authentication": if supplied_credential { "provided_credential" } else { "saved_credential" },
+            "note": "SSH 连接已发起，不代表认证完成。继续轮询 list_sessions，首次主机指纹仍需在桌面确认。"}))
     }
 
     #[tool(description = "Default is a separate AI shell, NOT a takeover of an existing tab. To operate the user's existing shell, first take_over_session OR send_input(action=takeover, empty data) if the host has only the original tools and pass its terminal_id plus mode=takeover here. Only a response with sharesOriginalTerminal=true confirms the original PTY. UI handoff also establishes ownership. Reuses the shell per Agent/session: cd and export persist. Streams command and PTY output into an AI workspace tab. After explicit take_over_session, sends the raw command to that existing PTY instead, returns sent=true, running=null and exitCode=null: inspect read_output before sending further input. stdout contains combined PTY stdout/stderr. Wait timeout does NOT kill the command: running=true means poll read_output; do not execute it again. Concurrent execute_command calls on the same dedicated AI terminal are rejected. Built-in AI danger rules apply before sending in BOTH modes; blocked commands must not be rewritten or encoded to retry. Use send_input for line-based interactive answers or Ctrl+C. Dedicated mode requires an additional PTY shell; takeover mode reuses the original PTY; never silently falls back to a human terminal; that requires explicit take_over_session.")]
