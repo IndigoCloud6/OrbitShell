@@ -1,5 +1,5 @@
-import {useState} from 'react';
-import type {ReactNode} from 'react';
+import {useId, useRef, useState} from 'react';
+import type {KeyboardEvent, ReactNode} from 'react';
 import {HStack, VStack, StackItem} from '@astryxdesign/core/Stack';
 import {Text} from '@astryxdesign/core/Text';
 import {Button} from '@astryxdesign/core/Button';
@@ -15,12 +15,33 @@ import {TransferHistoryDialog} from '../files/transfer-history';
 import type {ToolTab} from './ide-chrome';
 
 export interface ConnectionLog extends Record<string, unknown> {id: string; time: string; name: string; message: string}
+const toolTabs: ReadonlyArray<{id: ToolTab; label: string}> = [
+  {id: 'transfers', label: '传输队列'},
+  {id: 'logs', label: '连接日志'},
+  {id: 'ai', label: 'AI 工具'},
+  {id: 'commands', label: '快捷指令'},
+];
 export function WorkspaceTools({transfers, records = transfers, transferWarning = '', logs, tab, open, onTab, onToggle, onClear, ai, commands}: {
   transfers: Transfer[]; logs: ConnectionLog[]; tab: ToolTab; open: boolean;
   records?: Transfer[]; transferWarning?: string;
   onTab: (tab: ToolTab) => void; onToggle: () => void; onClear: () => void; ai: ReactNode; commands?: ReactNode;
 }) {
   const [historyOpen, setHistoryOpen] = useState(false);
+  const tabsId = useId();
+  const tabButtons = useRef(new Map<ToolTab, HTMLButtonElement>());
+  const navigateTabs = (event: KeyboardEvent<HTMLElement>, current: ToolTab) => {
+    if (event.defaultPrevented || event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
+    const index = toolTabs.findIndex(item => item.id === current);
+    const nextIndex = event.key === 'ArrowRight' ? (index + 1) % toolTabs.length :
+      event.key === 'ArrowLeft' ? (index + toolTabs.length - 1) % toolTabs.length :
+      event.key === 'Home' ? 0 : event.key === 'End' ? toolTabs.length - 1 : null;
+    const next = nextIndex === null ? undefined : toolTabs[nextIndex];
+    if (!next) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onTab(next.id);
+    tabButtons.current.get(next.id)?.focus();
+  };
   // One size for the whole dock, independent of the active tab and its contents.
   // Keep the controller mounted while collapsed so reopening restores this size.
   // Start the revised preference at 200px instead of restoring the old tall dock.
@@ -31,11 +52,11 @@ export function WorkspaceTools({transfers, records = transfers, transferWarning 
     <VStack id="workspace-tools-panel" className={open ? 'workspace-tools is-open' : 'workspace-tools'} data-tab={tab} gap={0} {...(open ? {height: panel.size} : {})}>
     <HStack className="tools-heading" vAlign="center" gap={0}>
       <HStack className="tools-tabs" role="tablist" aria-label="工作区工具" gap={0}>
-        <Button className="tool-tab" data-active={String(tab === 'transfers')} label="传输队列" role="tab" aria-selected={tab === 'transfers'} aria-controls="tool-transfers" variant="ghost"
-          endContent={transfers.length ? <Text className="count-label">{transfers.length}</Text> : undefined} onClick={() => onTab('transfers')} />
-        <Button className="tool-tab" data-active={String(tab === 'logs')} label="连接日志" role="tab" aria-selected={tab === 'logs'} aria-controls="tool-logs" variant="ghost" onClick={() => onTab('logs')} />
-        <Button className="tool-tab" data-active={String(tab === 'ai')} label="AI 工具" role="tab" aria-selected={tab === 'ai'} aria-controls="tool-ai" variant="ghost" onClick={() => onTab('ai')} />
-        <Button className="tool-tab" data-active={String(tab === 'commands')} label="快捷指令" role="tab" aria-selected={tab === 'commands'} aria-controls="tool-commands" variant="ghost" onClick={() => onTab('commands')} />
+        {toolTabs.map(item => <Button key={item.id} id={`${tabsId}-${item.id}`} className="tool-tab" label={item.label} role="tab"
+          ref={element => { if (element) tabButtons.current.set(item.id, element); else tabButtons.current.delete(item.id); }}
+          aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} variant="ghost"
+          endContent={item.id === 'transfers' && transfers.length ? <Text className="count-label">{transfers.length}</Text> : undefined}
+          onClick={() => onTab(item.id)} onKeyDown={event => navigateTabs(event, item.id)} />)}
       </HStack>
       <StackItem size="fill" />
       {tab === 'transfers' && <Button label="传输记录" className="clear-transfers" size="sm" variant="ghost" onClick={() => setHistoryOpen(true)} />}
@@ -43,7 +64,7 @@ export function WorkspaceTools({transfers, records = transfers, transferWarning 
       <IconButton label={open ? '折叠工具面板' : '展开工具面板'} tooltip={open ? '折叠工具面板' : '展开工具面板'} className="tools-collapse" variant="ghost" size="sm" icon={open ? <ChevronDown /> : <ChevronUp />} onClick={onToggle} />
     </HStack>
     {open && <StackItem className="tools-content" size="fill" isScrollable>
-      {tab === 'transfers' && <VStack id="tool-transfers" role="tabpanel" className="transfer-table-wrap" gap={0}>
+      {tab === 'transfers' && <VStack id={`${tabsId}-panel-transfers`} role="tabpanel" aria-labelledby={`${tabsId}-transfers`} tabIndex={0} className="transfer-table-wrap" gap={0}>
         {transferWarning && <Banner className="compact-feedback" status="warning" title="传输记录提示" description={transferWarning} />}
         {transfers.length ? <Table<Transfer> className="transfer-table" data={transfers} idKey="id" density="compact" dividers="rows" textOverflow="truncate"
           columns={[
@@ -60,14 +81,14 @@ export function WorkspaceTools({transfers, records = transfers, transferWarning 
             {key: 'status', header: '状态', width: pixel(116), renderCell: row => <Text className={row.status === 'done' ? 'success-icon' : row.status === 'error' ? 'error-icon' : ''} maxLines={1} hasTruncateTooltip>{row.status === 'done' ? '✓ 已完成' : row.message}</Text>},
           ]} /> : <Text className="tools-empty" color="secondary">暂无传输任务 · 在右侧文件区上传或下载文件</Text>}
       </VStack>}
-      {tab === 'logs' && <VStack id="tool-logs" role="tabpanel" gap={0}>
+      {tab === 'logs' && <VStack id={`${tabsId}-panel-logs`} role="tabpanel" aria-labelledby={`${tabsId}-logs`} tabIndex={0} gap={0}>
         {logs.length ? <Table<ConnectionLog> className="connection-log-table" data={logs} idKey="id" density="compact" dividers="rows"
           columns={[{key: 'time', header: '时间', width: pixel(104)}, {key: 'name', header: '连接', width: pixel(160)}, {key: 'message', header: '事件', width: proportional(1)}]} /> :
           <Text className="tools-empty" color="secondary">连接状态变化将在这里显示，日志仅保留在本次运行中。</Text>}
         {logs.length > 0 && <Text className="tools-note" color="secondary">仅保留本次运行的连接状态</Text>}
       </VStack>}
-      {tab === 'ai' && <VStack id="tool-ai" role="tabpanel" className="ai-tools" height="100%" gap={0}>{ai}</VStack>}
-      {tab === 'commands' && <VStack id="tool-commands" role="tabpanel" className="quick-tools" height="100%" gap={0}>{commands ?? <Text className="tools-empty">本页面为隔离设计场景，未加载真实快捷指令。</Text>}</VStack>}
+      {tab === 'ai' && <VStack id={`${tabsId}-panel-ai`} role="tabpanel" aria-labelledby={`${tabsId}-ai`} className="ai-tools" height="100%" gap={0}>{ai}</VStack>}
+      {tab === 'commands' && <VStack id={`${tabsId}-panel-commands`} role="tabpanel" aria-labelledby={`${tabsId}-commands`} tabIndex={commands == null ? 0 : undefined} className="quick-tools" height="100%" gap={0}>{commands ?? <Text className="tools-empty">本页面为隔离设计场景，未加载真实快捷指令。</Text>}</VStack>}
     </StackItem>}
     </VStack>
     <TransferHistoryDialog open={historyOpen} records={records} warning={transferWarning} onClose={() => setHistoryOpen(false)} />

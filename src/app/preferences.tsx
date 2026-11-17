@@ -5,6 +5,7 @@ import {errorMessage} from '../shared/desktop';
 interface Preferences {
   uiDensity: 'compact' | 'comfortable';
   fontSize: number;
+  screenReaderMode: boolean;
   compactFiles: boolean;
   showHiddenFiles: boolean;
   showServers: boolean;
@@ -13,6 +14,7 @@ interface Preferences {
 interface ContextValue extends Preferences {
   setUiDensity: (value: Preferences['uiDensity']) => void;
   setFontSize: Dispatch<SetStateAction<number>>;
+  setScreenReaderMode: (value: boolean) => void;
   setCompactFiles: (value: boolean) => void;
   setShowHiddenFiles: (value: boolean) => void;
   setShowServers: (value: boolean) => void;
@@ -21,7 +23,7 @@ interface ContextValue extends Preferences {
 }
 const Context = createContext<ContextValue | null>(null);
 const key = 'orbitshell.preferences.v1';
-const defaults: Preferences = {uiDensity: 'compact', fontSize: 17, compactFiles: true, showHiddenFiles: false, showServers: true, showFiles: true};
+const defaults: Preferences = {uiDensity: 'compact', fontSize: 17, screenReaderMode: false, compactFiles: true, showHiddenFiles: false, showServers: true, showFiles: true};
 
 function read(): Preferences {
   try {
@@ -31,6 +33,7 @@ function read(): Preferences {
     return {
       uiDensity: saved.uiDensity === 'comfortable' ? 'comfortable' : 'compact',
       fontSize: typeof saved.fontSize === 'number' && Number.isInteger(saved.fontSize) && saved.fontSize >= 11 && saved.fontSize <= 24 ? saved.fontSize : defaults.fontSize,
+      screenReaderMode: typeof saved.screenReaderMode === 'boolean' ? saved.screenReaderMode : defaults.screenReaderMode,
       compactFiles: typeof saved.compactFiles === 'boolean' ? saved.compactFiles : defaults.compactFiles,
       showHiddenFiles: typeof saved.showHiddenFiles === 'boolean' ? saved.showHiddenFiles : defaults.showHiddenFiles,
       showServers: typeof saved.showServers === 'boolean' ? saved.showServers : defaults.showServers,
@@ -57,11 +60,12 @@ export function PreferencesProvider({children}: {children: ReactNode}) {
     });
   }, []);
   const setUiDensity = useCallback((uiDensity: Preferences['uiDensity']) => setPreferences(previous => ({...previous, uiDensity})), []);
+  const setScreenReaderMode = useCallback((screenReaderMode: boolean) => setPreferences(previous => ({...previous, screenReaderMode})), []);
   const setCompactFiles = useCallback((compactFiles: boolean) => setPreferences(previous => ({...previous, compactFiles})), []);
   const setShowHiddenFiles = useCallback((showHiddenFiles: boolean) => setPreferences(previous => ({...previous, showHiddenFiles})), []);
   const setShowServers = useCallback((showServers: boolean) => setPreferences(previous => ({...previous, showServers})), []);
   const setShowFiles = useCallback((showFiles: boolean) => setPreferences(previous => ({...previous, showFiles})), []);
-  return <Context value={{...preferences, persistenceError, setUiDensity, setFontSize, setCompactFiles, setShowHiddenFiles, setShowServers, setShowFiles}}>{children}</Context>;
+  return <Context value={{...preferences, persistenceError, setUiDensity, setFontSize, setScreenReaderMode, setCompactFiles, setShowHiddenFiles, setShowServers, setShowFiles}}>{children}</Context>;
 }
 
 export function usePreferences() {

@@ -122,6 +122,13 @@ export default function SettingsDialog() {
                     <Text className="settings-terminal-preview" style={{fontSize: preferences.fontSize}}>Aa Bb 0123456789 · 终端文字预览</Text>
                   </VStack>
                 </HStack>
+                <HStack className="settings-row" gap={4} vAlign="start">
+                  <Text className="settings-label">辅助功能</Text>
+                  <VStack className="settings-row-content" gap={2}>
+                    <CheckboxInput label="启用终端读屏支持" value={preferences.screenReaderMode} onChange={preferences.setScreenReaderMode}
+                      description="使用屏幕阅读器读取终端内容，适用于人工和 AI 终端；更改后立即生效。" />
+                  </VStack>
+                </HStack>
               </VStack>
               <VStack className="settings-section" gap={3}>
                 <Text className="settings-section-title">窗口与后台运行</Text>

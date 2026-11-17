@@ -65,8 +65,11 @@ export function SessionTabs({sessions, activeId, onSelect, onClose, onCreate, on
     return () => observer.disconnect();
   }, [activeId, activeEditorId, activeAiId, sessions.length, editors.length, aiTerminals.length, activeUtilityId, utilityTabs.length]);
   const tabIds = [...sessions.map(item => item.id), ...editors.map(item => item.id), ...aiTerminals.map(item => item.id), ...utilityTabs.map(item => item.id)];
+  const clearKeyboardNavigation = () => {
+    if (strip.current) delete strip.current.dataset.orbitTabNavigation;
+  };
   const navigateTabs = (event: KeyboardEvent<HTMLElement>, index: number) => {
-    if (event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.defaultPrevented || event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.key === 'Delete') {
       event.preventDefault(); const id = tabIds[index];
       if (id) { if (index < sessions.length) onClose(id); else if (index < sessions.length + editors.length) onCloseEditor?.(id); else if (index < sessions.length + editors.length + aiTerminals.length) onCloseAi?.(id); else onCloseUtility?.(id); }
@@ -76,12 +79,14 @@ export function SessionTabs({sessions, activeId, onSelect, onClose, onCreate, on
     const id = nextIndex === null ? null : tabIds[nextIndex];
     if (!id || nextIndex === null) return;
     event.preventDefault();
+    if (strip.current) strip.current.dataset.orbitTabNavigation = 'keyboard';
     if (nextIndex < sessions.length) onSelect(id); else if (nextIndex < sessions.length + editors.length) onSelectEditor?.(id); else if (nextIndex < sessions.length + editors.length + aiTerminals.length) onSelectAi?.(id); else onSelectUtility?.(id);
     items.current.get(id)?.querySelector<HTMLButtonElement>('button')?.focus();
   };
 
   if (!sessions.length && !editors.length && !aiTerminals.length && !utilityTabs.length) return <HStack gap={0} vAlign="center"><Text className="tab-placeholder session-start-label">开始</Text><IconButton className="new-session" label="打开新会话" tooltip="打开新会话" icon={<Plus />} variant="ghost" onClick={onCreate} /></HStack>;
-  return <HStack ref={strip} role="group" aria-label="SSH 会话" gap={0} className="session-strip">
+  return <HStack ref={strip} role="group" aria-label="SSH 会话" gap={0} className="session-strip"
+    onPointerDownCapture={clearKeyboardNavigation} onKeyDownCapture={clearKeyboardNavigation}>
     {sessions.map((session, index) => {
       const active = !activeUtilityId && !activeAiId && !activeEditorId && session.id === activeId;
       const owner = takeovers.find(terminal => terminal.sessionId === session.id);

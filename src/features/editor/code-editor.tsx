@@ -27,6 +27,7 @@ import {ClipboardPaste, Copy, Scissors, Search, TextSelect, Undo2, Redo2, WandSp
 import {MenuShortcut, openContextMenuFromKeyboard, useCopyText} from '../../shared/context-menu';
 import {errorMessage} from '../../shared/desktop';
 import {readClipboardText, writeClipboardText} from '../../shared/clipboard';
+import {isWorkspaceTabNavigationFocused} from '../../shared/workspace-focus';
 import {assertFormatSize, formatJson, formatNginx, formatterForFile, formattingChanges} from './format-document';
 import type {FormatMode} from './format-document';
 
@@ -156,8 +157,12 @@ export function CodeEditor({name, path = name, value, active, readOnly, findRequ
     if (editor && editor.state.doc.toString() !== value) editor.dispatch({changes: {from: 0, to: editor.state.doc.length, insert: value}, annotations: isolateHistory.of('full')});
   }, [value]);
   useEffect(() => { view.current?.dispatch({effects: editability.current.reconfigure(EditorState.readOnly.of(readOnly))}); }, [readOnly]);
-  useEffect(() => { if (active) { view.current?.requestMeasure(); view.current?.focus(); } }, [active]);
-  useEffect(() => { if (findRequest && active && view.current) openSearchPanel(view.current); }, [findRequest, active]);
+  useEffect(() => {
+    if (!active) return;
+    view.current?.requestMeasure();
+    if (!isWorkspaceTabNavigationFocused()) view.current?.focus();
+  }, [active]);
+  useEffect(() => { if (findRequest && active && view.current && !isWorkspaceTabNavigationFocused()) openSearchPanel(view.current); }, [findRequest, active]);
   useEffect(() => {
     if (!formatRequest || !formatRequest.id || formatRequest.id === lastFormatRequest.current) return;
     lastFormatRequest.current = formatRequest.id;

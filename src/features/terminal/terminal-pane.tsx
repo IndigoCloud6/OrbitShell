@@ -18,6 +18,7 @@ import type {ShellSession, TerminalRuntime} from './runtime';
 import {MenuShortcut, openContextMenuFromKeyboard, useCopyText} from '../../shared/context-menu';
 import {readClipboardText, writeClipboardText} from '../../shared/clipboard';
 import {errorMessage} from '../../shared/desktop';
+import {isWorkspaceTabNavigationFocused} from '../../shared/workspace-focus';
 
 interface Props {
   session: Pick<ShellSession, 'id' | 'status'> & {profile: Pick<ShellSession['profile'], 'name'>};
@@ -49,7 +50,7 @@ export function TerminalPane({session, runtime, active, readOnly = false, fontSi
   const [hasSelection, setHasSelection] = useState(false);
   const copy = useCopyText();
   const {mode} = useThemePreference();
-  const {setFontSize} = usePreferences();
+  const {setFontSize, screenReaderMode} = usePreferences();
 
   useEffect(() => {
     const element = host.current;
@@ -59,7 +60,7 @@ export function TerminalPane({session, runtime, active, readOnly = false, fontSi
     const terminal = new Terminal({
       fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "Microsoft YaHei", monospace',
       fontSize, lineHeight: 1.15, fontWeight: 'normal', fontWeightBold: '600', cursorBlink: true, cursorStyle: 'block', cursorInactiveStyle: 'outline',
-      scrollback: 10000, scrollOnUserInput: true, rightClickSelectsWord: false,
+      scrollback: 10000, scrollOnUserInput: true, rightClickSelectsWord: false, screenReaderMode,
       allowProposedApi: true, disableStdin: true, theme: palette.theme,
     });
     const addon = new FitAddon();
@@ -118,7 +119,8 @@ export function TerminalPane({session, runtime, active, readOnly = false, fontSi
       detach(); input.dispose(); binary.dispose(); resize.dispose(); resultListener.dispose();
       runtime.terminal = null; fit.current = null; search.current = null; terminal.dispose();
     };
-    // Font and theme changes update the existing terminal below, preserving its buffer.
+    // Font, theme and accessibility changes update the existing terminal below,
+    // preserving its buffer and connection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runtime, setFontSize]);
 
@@ -127,9 +129,14 @@ export function TerminalPane({session, runtime, active, readOnly = false, fontSi
   }, [runtime, session.status, readOnly]);
 
   useEffect(() => {
+    if (runtime.terminal) runtime.terminal.options.screenReaderMode = screenReaderMode;
+  }, [runtime, screenReaderMode]);
+
+  useEffect(() => {
     if (!active) return;
     const frame = requestAnimationFrame(() => {
       fit.current?.fit();
+      if (isWorkspaceTabNavigationFocused()) return;
       if (searchOpen) { searchInput.current?.focus(); searchInput.current?.select(); }
       else runtime.terminal?.focus();
     });
