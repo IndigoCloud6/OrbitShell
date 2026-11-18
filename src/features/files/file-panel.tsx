@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState} from 'react';
-import {useQuery, useQueryClient} from '@tanstack/react-query';
+import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query';
 import {usePreferences} from '../../app/preferences';
 import {desktopCommand, errorMessage} from '../../shared/desktop';
 import type {ShellSession} from '../terminal/runtime';
@@ -8,6 +8,17 @@ import {useTransfers} from './transfer-provider';
 import type {Directory, RemoteEntry} from './file-utils';
 import {validateTerminalDirectory} from '../terminal/working-directory';
 import {useFileDrag} from './use-file-drag';
+import {RemoveRemoteEntryDialog} from './remove-remote-entry-dialog';
+
+interface RemovalTarget {
+  sessionId: string;
+  server: string;
+  contextKey: string;
+  queryPath: string;
+  directory: string;
+  entry: RemoteEntry;
+}
+
 export function FilePanel({session, onCollapse, onEdit, onTerminalDirectory, terminalDirectoryReason}: {
   session: ShellSession | null; onCollapse: () => void; onEdit?: (session: ShellSession, entry: RemoteEntry) => void;
   onTerminalDirectory?: () => Promise<string>; terminalDirectoryReason?: string;
@@ -20,6 +31,7 @@ export function FilePanel({session, onCollapse, onEdit, onTerminalDirectory, ter
   const [selected, setSelected] = useState<RemoteEntry | null>(null);
   const [locating, setLocating] = useState(false);
   const [locateError, setLocateError] = useState('');
+  const [removal, setRemoval] = useState<RemovalTarget | null>(null);
   const dropTarget = useRef<HTMLElement | null>(null);
   const intent = useRef(0);
   const currentSession = useRef(session?.id);
@@ -39,6 +51,37 @@ export function FilePanel({session, onCollapse, onEdit, onTerminalDirectory, ter
   });
   const preparing = connected && query.isFetching && !query.data;
   const contextKey = `${session?.id ?? 'none'}:${path}:${session?.status ?? 'none'}`;
+  const deletion = useMutation({
+    retry: false,
+    networkMode: 'always',
+    mutationFn: (target: RemovalTarget) => desktopCommand<void>('sftp_delete_entry', {
+      sessionId: target.sessionId, directory: target.directory, path: target.entry.path,
+      isDirectory: target.entry.isDirectory, isSymlink: target.entry.isSymlink,
+    }),
+    onSuccess: (_result, target) => {
+      setRemoval(current => current === target ? null : current);
+      setSelected(current => current === target.entry ? null : current);
+    },
+    onSettled: (_result, _error, target) => {
+      // Refresh the captured directory and any cached aliases, including after
+      // a timeout, when the server might have applied the deletion.
+      void queryClient.invalidateQueries({
+        queryKey: ['remote-directory', target.sessionId],
+        predicate: cached => cached.queryKey[2] === target.queryPath ||
+          queryClient.getQueryData<Directory>(cached.queryKey)?.path === target.directory,
+      });
+    },
+  });
+  useEffect(() => { setRemoval(null); }, [contextKey]);
+  const offerRemoval = (entry: RemoteEntry) => {
+    if (!session || !connected || !query.data || query.error ||
+        deletion.isPending || !query.data.entries.some(current => current.path === entry.path &&
+          current.isDirectory === entry.isDirectory && current.isSymlink === entry.isSymlink)) return;
+    deletion.reset();
+    const {name, hostname, port} = session.profile;
+    setRemoval({sessionId: session.id, server: `${name} · ${hostname}:${port}`, contextKey, queryPath: path,
+      directory: query.data.path, entry});
+  };
   useEffect(() => { setDraft(query.data?.path ?? path); setSelected(null); }, [session?.id, path, query.data?.path]);
   const navigate = (next: string) => { intent.current++; setLocateError(''); if (session && connected) setPaths(previous => ({...previous, [session.id]: next || '.'})); };
   const locateTerminal = async () => {
@@ -88,7 +131,7 @@ export function FilePanel({session, onCollapse, onEdit, onTerminalDirectory, ter
       await run({sessionId: session.id, direction: 'download', path: entry.path, name: entry.name, drag: true});
     },
   });
-  return <FileBrowserView connected={connected} entries={query.data?.entries ?? []} path={draft} selectedPath={selected?.path ?? null}
+  return <><FileBrowserView connected={connected} entries={query.data?.entries ?? []} path={draft} selectedPath={selected?.path ?? null}
     contextKey={contextKey} directoryPath={query.data?.path ?? path} dropTargetRef={dropTarget} dropDirectory={drag.targetDirectory} onDragDownload={drag.beginDownload}
     compact={compactFiles} showHidden={showHiddenFiles} preparing={preparing} loading={query.isPending || preparing} fetching={query.isFetching}
     {...(query.error ? {error: errorMessage(query.error)} : {})}
@@ -100,5 +143,11 @@ export function FilePanel({session, onCollapse, onEdit, onTerminalDirectory, ter
     onPath={value => { intent.current++; setDraft(value); setLocateError(''); }} onNavigate={navigate} onRefresh={() => { setLocateError(''); if (connected) void queryClient.refetchQueries({queryKey: ['remote-directory', session?.id, path], exact: true, type: 'active'}); }} onHidden={() => setShowHiddenFiles(!showHiddenFiles)}
     onDensity={() => setCompactFiles(!compactFiles)} onUpload={directory => { void transfer('upload', null, directory); }} onDownload={entry => { void transfer('download', entry); }}
     onSelect={setSelected} onCollapse={onCollapse} {...(onEdit ? {onEdit: (entry: RemoteEntry) => { if (session && connected) onEdit(session, entry); }} : {})}
-    />;
+    {...(connected && !deletion.isPending ? {onRemove: offerRemoval} : {})} />
+    {removal?.contextKey === contextKey && <RemoveRemoteEntryDialog
+      entry={removal.entry} server={removal.server} busy={deletion.isPending}
+      error={deletion.error ? errorMessage(deletion.error) : ''}
+      onCancel={() => setRemoval(null)}
+      onConfirm={() => { if (!deletion.isPending && !deletion.error) deletion.mutate(removal); }} />}
+  </>;
 }

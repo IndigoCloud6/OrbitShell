@@ -10,7 +10,7 @@ import {Banner} from '@astryxdesign/core/Banner';
 import {List, ListItem} from '@astryxdesign/core/List';
 import {ContextMenu} from '@astryxdesign/core/ContextMenu';
 import type {ContextMenuOption} from '@astryxdesign/core/ContextMenu';
-import {ArrowLeft, RefreshCw, Eye, EyeOff, Upload, Download, MoreHorizontal, Folder, FolderOpen, Copy, PanelRightClose, FilePenLine, FolderSync} from 'lucide-react';
+import {ArrowLeft, RefreshCw, Eye, EyeOff, Upload, Download, MoreHorizontal, Folder, FolderOpen, Copy, PanelRightClose, FilePenLine, FolderSync, Trash2} from 'lucide-react';
 import {formatBytes} from './file-utils';
 import type {RemoteEntry} from './file-utils';
 import {RemoteFileIcon} from './remote-file-icon';
@@ -26,6 +26,7 @@ interface Props {
   onHidden: () => void; onDensity: () => void; onUpload: (directory?: string) => void; onDownload: (entry?: RemoteEntry) => void;
   onSelect: (entry: RemoteEntry) => void; onCollapse: () => void;
   onEdit?: (entry: RemoteEntry) => void;
+  onRemove?: (entry: RemoteEntry) => void;
   onLocateDirectory?: () => void; locating?: boolean; locateDirectoryReason?: string;
   actionError?: string; onDismissActionError?: () => void;
   actionErrorTitle?: string; dropTargetRef?: Ref<HTMLElement>; dropDirectory?: string | null;
@@ -52,6 +53,16 @@ export function FileBrowserView(props: Props) {
     {type: 'divider'},
     {label: '复制名称', icon: <Copy />, onClick: () => { void copy(entry.name); }},
     {label: entry.isDirectory ? '复制目录路径' : '复制完整路径', icon: <Copy />, onClick: () => { void copy(entry.path); }},
+    ...(snapshot.onRemove ? [
+      {type: 'divider'} as const,
+      {
+        label: '删除', variant: 'destructive' as const, icon: <Trash2 />,
+        isDisabled: unavailable || snapshot.contextKey !== props.contextKey || !props.onRemove,
+        onClick: () => {
+          if (snapshot.contextKey === props.contextKey) props.onRemove?.(entry);
+        },
+      },
+    ] : []),
   ] : [
     {label: '上传文件', icon: <Upload />, isDisabled: unavailable, onClick: () => snapshot.onUpload(directory)},
     {label: '刷新目录', icon: <RefreshCw />, isDisabled: unavailable, onClick: snapshot.onRefresh},
