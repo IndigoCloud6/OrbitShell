@@ -14,6 +14,8 @@ mod command_guard;
 mod clipboard;
 mod sftp_transfer;
 mod file_transfers;
+mod manual_upload;
+mod file_drag;
 
 use anyhow::{anyhow, Context};
 use sftp_transfer::TransferProgress;
@@ -40,6 +42,7 @@ pub struct AppState {
     desktop: desktop::DesktopState,
     recent: recent::RecentState,
     transfers: file_transfers::Transfers,
+    upload_confirmations: manual_upload::Confirmations,
 }
 
 impl AppState {
@@ -256,22 +259,6 @@ async fn sftp_download(session_id: String, transfer_id: String, path: String, pr
         .map_err(|error| format!("下载失败：{error:#}"))
 }
 
-#[tauri::command]
-async fn sftp_upload(session_id: String, transfer_id: String, directory: String, progress: Channel<TransferProgress>, app: AppHandle, state: State<'_, AppState>) -> Result<Option<TransferResult>, String> {
-    let live = state.session(&session_id)?;
-    let Some(source) = rfd::AsyncFileDialog::new().set_title("上传文件到远程目录").pick_file().await else { return Ok(None); };
-    let name = source.path().file_name().and_then(|name| name.to_str()).ok_or("文件名无效")?.to_owned();
-    let task = state.transfers.manual(&app, transfer_id, &live, &session_id, file_transfers::Direction::Upload,
-        name.clone(), source.path().to_string_lossy().into_owned(), format!("{}/{name}", directory.trim_end_matches('/')))?;
-    let cancel = CancellationToken::new();
-    let result = sftp_transfer::upload(&live, source.path(), &directory, &name, |event| {
-        task.progress(&app, event.clone()); let _ = progress.send(event);
-    }, &cancel).await;
-    state.transfers.finish(&app, &task, &live, &result);
-    result.map(|outcome| Some(TransferResult { name: outcome.name, bytes: outcome.bytes }))
-        .map_err(|error| format!("上传失败：{error:#}"))
-}
-
 pub fn run() {
     use tauri_plugin_deep_link::DeepLinkExt;
     tauri::Builder::default()
@@ -297,7 +284,7 @@ pub fn run() {
                 store.desktop.close_to_tray
             };
             app.manage(AppState { storage, sessions: Mutex::new(HashMap::new()), launches: Mutex::new(Vec::new()),
-                mcp_enabled: AtomicBool::new(false), mcp_epoch: AtomicU64::new(0), mcp_runtime: tokio::sync::Mutex::new(None), mcp_startup_error: Mutex::new(None), history, executions: executions::ExecutionStore::default(), ai: ai_terminals::AiTerminals::default(), editor: remote_editor::EditorStore::default(), desktop: desktop::DesktopState::new(close_to_tray), recent: recent::RecentState::default(), transfers: file_transfers::Transfers::open(app.path().app_data_dir()?) });
+                mcp_enabled: AtomicBool::new(false), mcp_epoch: AtomicU64::new(0), mcp_runtime: tokio::sync::Mutex::new(None), mcp_startup_error: Mutex::new(None), history, executions: executions::ExecutionStore::default(), ai: ai_terminals::AiTerminals::default(), editor: remote_editor::EditorStore::default(), desktop: desktop::DesktopState::new(close_to_tray), recent: recent::RecentState::default(), transfers: file_transfers::Transfers::open(app.path().app_data_dir()?), upload_confirmations: manual_upload::Confirmations::default() });
             if mcp_auto_start {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -346,7 +333,8 @@ pub fn run() {
             clipboard::clipboard_read_text, clipboard::clipboard_write_text,
             credential_status, save_connection_credential, forget_connection_credential,
             ssh_connect, ssh_write, ssh_resize, ssh_acknowledge, ssh_trust_host, ssh_disconnect,
-            sftp_list, sftp_download, sftp_upload, mcp::mcp_status, mcp::mcp_set_enabled,
+            sftp_list, sftp_download, manual_upload::sftp_upload, manual_upload::sftp_confirm_upload,
+            file_drag::sftp_drag_download, mcp::mcp_status, mcp::mcp_set_enabled,
             file_transfers::file_transfer_list,
             remote_editor::editor_open, remote_editor::editor_read, remote_editor::editor_save, remote_editor::editor_close,
             remote_editor::editor_snapshots, remote_editor::editor_snapshot_read,

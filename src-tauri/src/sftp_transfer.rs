@@ -1,6 +1,6 @@
 use crate::ssh::LiveSession;
 use anyhow::{anyhow, bail, Context, Result};
-use russh_sftp::protocol::OpenFlags;
+use russh_sftp::protocol::{OpenFlags, FileAttributes};
 use serde::Serialize;
 use std::{future::Future, path::{Path, PathBuf}, time::{Duration, Instant}};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -12,6 +12,25 @@ use tokio_util::sync::CancellationToken;
 pub struct TransferProgress { pub name: String, pub bytes: u64, pub total: Option<u64> }
 
 pub struct Outcome { pub name: String, pub bytes: u64, pub local_path: PathBuf, pub remote_path: String }
+
+// Only a definite server-side exclusive-create rejection permits a desktop
+// collision re-check. A timeout or failed write must never trigger an automatic retry.
+#[derive(Debug)]
+pub struct UploadCreateRejected;
+impl std::fmt::Display for UploadCreateRejected {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { formatter.write_str("服务器拒绝排他创建上传目标") }
+}
+impl std::error::Error for UploadCreateRejected {}
+
+struct CreatedUpload { sftp: std::sync::Arc<russh_sftp::client::SftpSession>, path: String, armed: bool }
+impl Drop for CreatedUpload {
+    fn drop(&mut self) {
+        if self.armed {
+            let sftp = self.sftp.clone(); let path = self.path.clone();
+            tauri::async_runtime::spawn(async move { let _ = timeout(Duration::from_secs(5), sftp.remove_file(path)).await; });
+        }
+    }
+}
 
 async fn connected<T>(live: &LiveSession, cancel: &CancellationToken, action: impl Future<Output = Result<T>>) -> Result<T> {
     tokio::select! {
@@ -73,7 +92,7 @@ pub async fn download(live: &LiveSession, remote: &str, destination: &Path, over
     }).await
 }
 
-pub async fn upload(live: &LiveSession, source: &Path, directory: &str, filename: &str,
+pub async fn upload(live: &LiveSession, source: &Path, directory: &str, filename: &str, permissions: Option<u32>,
     report: impl Fn(TransferProgress), cancel: &CancellationToken) -> Result<Outcome> {
     if filename.is_empty() || matches!(filename, "." | "..") || filename.chars().any(|c| c.is_control() || matches!(c, '/' | '\\')) {
         bail!("本机文件名无效");
@@ -92,10 +111,13 @@ pub async fn upload(live: &LiveSession, source: &Path, directory: &str, filename
     }).await?;
     // Never truncate or replace an existing remote file, including a symlink.
     let mut output = connected(live, cancel, async {
-        Ok(timeout(Duration::from_secs(60), sftp.open_with_flags(&path, OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE)).await
+        Ok(timeout(Duration::from_secs(60), sftp.open_with_flags_and_attributes(&path, OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE,
+            FileAttributes { permissions, ..FileAttributes::empty() })).await
             .context("创建远程文件超时，结果未确认，请先核对目标文件")?
+            .map_err(|error| anyhow::Error::new(UploadCreateRejected).context(error))
             .context("无法创建远程文件；若存在同名文件，请先重命名")?)
     }).await?;
+    let mut cleanup = CreatedUpload { sftp: sftp.clone(), path: path.clone(), armed: true };
     let copied = connected(live, cancel, async {
         let bytes = copy(&mut input, &mut output, &name, Some(total), &report).await?;
         timeout(Duration::from_secs(60), output.flush()).await.context("刷新远程文件超时")??;
@@ -109,10 +131,11 @@ pub async fn upload(live: &LiveSession, source: &Path, directory: &str, filename
     }).await;
     let result = copied.and_then(|bytes| closed.map(|()| bytes));
     match result {
-        Ok(bytes) => Ok(Outcome { name, bytes, local_path: source.into(), remote_path: path }),
+        Ok(bytes) => { cleanup.armed = false; Ok(Outcome { name, bytes, local_path: source.into(), remote_path: path }) },
         Err(error) => {
             // Only clean up the new file created by this attempt, never an existing destination.
             let _ = timeout(Duration::from_secs(5), sftp.remove_file(path)).await;
+            cleanup.armed = false;
             Err(error)
         }
     }

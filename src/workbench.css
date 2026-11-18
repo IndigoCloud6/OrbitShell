@@ -48,7 +48,12 @@
   .panel-hidden { display: none; }
   .ide-splitter { flex-basis: 0; width: 0; min-width: 0; }
   .workspace-stack, .file-panel, .file-browser, .connection-explorer, .connection-tree { min-width: 0; min-height: 0; }
-  .file-panel { overflow: hidden; }
+  .file-panel { position: relative; overflow: hidden; }
+  .file-drop-hint { position: absolute; z-index: 5; inset: calc(var(--orbit-unit) * .5); padding: calc(var(--orbit-unit) * 1.5); pointer-events: none; border: calc(var(--orbit-unit) * .125) dashed var(--color-accent); border-radius: var(--radius-inner); background: color-mix(in srgb, var(--color-background-surface) 94%, transparent); color: var(--color-text-primary); }
+  .file-drop-hint > svg { width: calc(var(--orbit-unit) * 2); height: calc(var(--orbit-unit) * 2); color: var(--color-accent); }
+  .file-drop-path { max-width: 100%; overflow-wrap: anywhere; font-size: var(--orbit-text-body); color: var(--color-text-secondary); text-align: center; }
+  .upload-conflict-dialog:modal { overscroll-behavior: contain; }
+  .upload-conflict-dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
   /* The direct flex child owns scrolling; the context trigger stays inside it. */
   .file-browser { flex: 1 1 0%; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
   .panel-heading { height: var(--orbit-heading-height); min-height: var(--orbit-heading-height); flex-shrink: 0; padding-inline: calc(var(--orbit-unit) * .8); }

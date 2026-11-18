@@ -1,4 +1,5 @@
 import {useState} from 'react';
+import type {PointerEvent, Ref} from 'react';
 import {HStack, VStack, StackItem} from '@astryxdesign/core/Stack';
 import {Text} from '@astryxdesign/core/Text';
 import {Button} from '@astryxdesign/core/Button';
@@ -27,6 +28,8 @@ interface Props {
   onEdit?: (entry: RemoteEntry) => void;
   onLocateDirectory?: () => void; locating?: boolean; locateDirectoryReason?: string;
   actionError?: string; onDismissActionError?: () => void;
+  actionErrorTitle?: string; dropTargetRef?: Ref<HTMLElement>; dropDirectory?: string | null;
+  onDragDownload?: (entry: RemoteEntry, event: PointerEvent<HTMLElement>) => void;
 }
 export function FileBrowserView(props: Props) {
   const entries = props.showHidden ? props.entries : props.entries.filter(entry => !entry.name.startsWith('.'));
@@ -58,7 +61,10 @@ export function FileBrowserView(props: Props) {
     {label: snapshot.showHidden ? '隐藏点号文件' : '显示隐藏文件', icon: snapshot.showHidden ? <EyeOff /> : <Eye />, onClick: snapshot.onHidden},
     {label: '复制目录路径', icon: <Copy />, isDisabled: !snapshot.connected, onClick: () => { void copy(directory); }},
   ];
-  return <VStack className="file-panel" height="100%" gap={0}>
+  return <VStack {...(props.dropTargetRef ? {ref: props.dropTargetRef} : {})} className="file-panel" data-drop-active={props.dropDirectory ? 'true' : 'false'} height="100%" gap={0}>
+    {props.dropDirectory && <VStack className="file-drop-hint" gap={2} hAlign="center" vAlign="center">
+      <Upload aria-hidden /><Text>释放以上传文件</Text><Text className="file-drop-path" maxLines={2}>{props.dropDirectory}</Text>
+    </VStack>}
     <HStack className="panel-heading file-heading" hAlign="between" vAlign="center"><Text className="panel-title">远程文件</Text>
       <IconButton label="收起远程文件" tooltip="收起远程文件" className="panel-collapse" variant="ghost" size="sm" icon={<PanelRightClose />} onClick={props.onCollapse} />
     </HStack>
@@ -84,7 +90,7 @@ export function FileBrowserView(props: Props) {
         </HStack>
       </HStack>
     </VStack>}
-    {props.actionError && <Banner className="compact-feedback" status="warning" title="目录定位未完成" description={props.actionError}
+    {props.actionError && <Banner className="compact-feedback" status="warning" title={props.actionErrorTitle ?? '目录定位未完成'} description={props.actionError}
       isDismissable onDismiss={() => props.onDismissActionError?.()} />}
     <StackItem size="fill" isScrollable className="file-browser" aria-label="远程文件列表">
     <ContextMenu key={props.contextKey ?? 'files'} data-orbit-context="files" data-directory-empty={String(isDirectoryEmpty)} className="orbit-context-menu" label={entry?.name ?? '远程文件'} size="sm" menuWidth="calc(var(--orbit-unit) * 18)" items={menu}
@@ -108,6 +114,8 @@ export function FileBrowserView(props: Props) {
               startContent={<RemoteFileIcon entry={entry} />}
               endContent={<Text className="file-size" color="secondary" hasTabularNumbers>{entry.isDirectory ? '—' : formatBytes(entry.size)}</Text>}
               onClick={() => props.onSelect(entry)} onDoubleClick={() => { if (entry.isDirectory) props.onNavigate(entry.path); }}
+              onPointerDown={event => { if (event.button === 0 && !entry.isDirectory && props.onDragDownload) { props.onSelect(entry); props.onDragDownload(entry, event); } }}
+              onDragStart={event => event.preventDefault()}
               onKeyDown={event => {
                 if (!event.nativeEvent.isComposing && (event.key === 'Enter' || event.key === 'ArrowRight') && entry.isDirectory) { event.preventDefault(); props.onNavigate(entry.path); }
               }} />)}

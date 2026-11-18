@@ -35,6 +35,9 @@ pub struct Snapshot { records: Vec<Transfer>, warning: Option<String> }
 
 pub struct Task { info: Mutex<Transfer>, cancel: CancellationToken, started: Instant, sample: Mutex<(Instant, u64)> }
 impl Task {
+    pub fn cancel(&self) { self.cancel.cancel(); }
+    pub fn cancelled(&self) -> bool { self.cancel.is_cancelled() }
+    pub fn message(&self, app: &AppHandle, message: &str) { self.patch(app, |info| info.message = message.into()); }
     fn new(info: Transfer) -> Self { Self { info: Mutex::new(info), cancel: CancellationToken::new(), started: Instant::now(), sample: Mutex::new((Instant::now(), 0)) } }
     fn snapshot(&self) -> Result<Transfer, String> { self.info.lock().map(|info| info.clone()).map_err(|_| "文件传输状态不可用".into()) }
     fn patch(&self, app: &AppHandle, update: impl FnOnce(&mut Transfer)) {
@@ -46,7 +49,7 @@ impl Task {
             let speed = progress.bytes.saturating_sub(sample.1) as f64 / sample.0.elapsed().as_secs_f64().max(0.05);
             *sample = (Instant::now(), progress.bytes); speed
         } else { 0.0 };
-        self.patch(app, |info| { info.name = progress.name; info.bytes = progress.bytes; info.total = progress.total; info.speed = speed; info.message = "传输中".into(); });
+        self.patch(app, |info| { if !info.active() { return; } info.name = progress.name; info.bytes = progress.bytes; info.total = progress.total; info.speed = speed; info.message = "传输中".into(); });
     }
 }
 
@@ -160,9 +163,20 @@ impl Transfers {
                 },
                 Err(_) if task.cancel.is_cancelled() || live.cancel.is_cancelled() => {
                     info.status = "cancelled".into();
-                    info.message = if live.cancel.is_cancelled() { "所属 SSH 会话已断开，传输已停止" } else { "MCP 已关闭，传输已停止" }.into();
+                    info.message = if live.cancel.is_cancelled() { "所属 SSH 会话已断开，传输已停止" } else if info.agent_id.is_some() { "MCP 已关闭，传输已停止" } else { "用户已取消传输" }.into();
                 },
                 Err(error) => { info.status = "error".into(); info.message = format!("传输失败：{error:#}"); },
+            }
+        });
+        self.save(app);
+    }
+    pub fn finish_drag(&self, app: &AppHandle, task: &Task, result: &Result<Option<u64>, String>) {
+        task.patch(app, |info| {
+            info.speed = 0.0; info.finished_at = Some(now()); info.elapsed_ms = task.started.elapsed().as_millis() as u64;
+            match result {
+                Ok(Some(bytes)) => { info.status = "done".into(); info.bytes = *bytes; info.total = Some(*bytes); info.message = "文件已交给系统拖放目标保存".into(); },
+                Ok(None) => { info.status = "cancelled".into(); info.message = "已取消拖出下载".into(); },
+                Err(error) => { info.status = "error".into(); info.message = error.clone(); },
             }
         });
         self.save(app);
@@ -197,7 +211,7 @@ impl Transfers {
                 let local = prepare_local_path(&local, direction).await?;
                 let progress = |event| task.progress(&app, event);
                 match direction {
-                    Direction::Upload => sftp_transfer::upload(&live, &local, &remote_path, &name, progress, &task.cancel).await,
+                    Direction::Upload => sftp_transfer::upload(&live, &local, &remote_path, &name, None, progress, &task.cancel).await,
                     Direction::Download => sftp_transfer::download(&live, &remote_path, &local, false, progress, &task.cancel).await,
                 }
             }.await;
