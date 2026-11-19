@@ -2,6 +2,10 @@
 
 OrbitShell 是面向 Windows 的原生 SSH / SFTP 工作台。它把多会话终端、远程文件管理与编辑、传输队列和 AI 协作放在同一个桌面窗口中。当前版本使用 Rust、GPUI 和 `alacritty_terminal`。
 
+![OrbitShell GPUI 工作台，左侧是连接列表，中间是 SSH 终端，右侧是远程文件面板](design/gpui-workbench.png)
+
+*图中使用演示连接和文件。*
+
 ## 选择分支
 
 | 分支 | 版本 |
