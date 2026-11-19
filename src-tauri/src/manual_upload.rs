@@ -2,10 +2,8 @@
 //! MCP keeps using sftp_transfer::upload's exclusive-create path.
 use crate::{file_transfers::{Direction, Task}, sftp_transfer::{self, Outcome, TransferProgress}, ssh::LiveSession, AppState, TransferResult};
 use anyhow::{anyhow, bail, Context, Result};
-use russh::{ChannelMsg, client};
-use russh_sftp::{client::{RawSftpSession, SftpSession}, protocol::{Packet, StatusCode, FileAttributes}};
 use serde::Serialize;
-use std::{collections::HashMap, path::{Path, PathBuf}, sync::{Arc, Mutex}, time::Duration};
+use std::{collections::HashMap, path::{Path, PathBuf}, sync::Mutex, time::Duration};
 use tauri::{AppHandle, Manager, State, ipc::Channel};
 use tokio::{sync::oneshot, time::timeout};
 use tokio_util::sync::CancellationToken;
@@ -52,95 +50,16 @@ async fn confirm(app: &AppHandle, live: &LiveSession, task: &Task, name: &str, p
     }
 }
 
-struct RemoteTemporary { sftp: Arc<SftpSession>, path: String, armed: bool }
-impl Drop for RemoteTemporary {
-    fn drop(&mut self) {
-        if self.armed {
-            let sftp = self.sftp.clone(); let path = self.path.clone();
-            tauri::async_runtime::spawn(async move { let _ = timeout(Duration::from_secs(5), sftp.remove_file(path)).await; });
-        }
-    }
-}
-
-async fn rename_channel(connection: &client::Handle<crate::ssh::SshHandler>) -> Result<RawSftpSession> {
-    let mut channel = connection.channel_open_session().await?;
-    channel.request_subsystem(true, "sftp").await?;
-    loop {
-        match channel.wait().await {
-            Some(ChannelMsg::Success) => break,
-            Some(ChannelMsg::Failure | ChannelMsg::Close) | None => bail!("服务器未接受文件替换通道"),
-            _ => {}
-        }
-    }
-    let raw = RawSftpSession::new(channel.into_stream());
-    let version = raw.init().await?;
-    if version.extensions.get("posix-rename@openssh.com").map(String::as_str) != Some("1") {
-        let _ = raw.close_session();
-        bail!("服务器不支持安全原子覆盖，原文件未修改；请取消或更换上传文件名");
-    }
-    Ok(raw)
-}
-
 async fn upload(app: &AppHandle, live: &LiveSession, task: &Task, source: &Path, directory: &str, name: &str, events: &Channel<UploadEvent>) -> Result<Outcome> {
     let cancel = CancellationToken::new();
-    let report = |event: TransferProgress| { task.progress(app, event.clone()); let _ = events.send(UploadEvent::Progress { progress: event }); };
-    let sftp = live.sftp().await?;
-    let directory = timeout(Duration::from_secs(60), sftp.canonicalize(directory)).await.context("读取远程目录超时")??;
-    let target = format!("{}/{name}", directory.trim_end_matches('/'));
-    let before = match timeout(Duration::from_secs(60), sftp.symlink_metadata(&target)).await.context("读取目标文件超时")? {
-        Ok(metadata) => metadata,
-        Err(russh_sftp::client::error::Error::Status(status)) if status.status_code == StatusCode::NoSuchFile => {
-            match sftp_transfer::upload(live, source, &directory, name, None, &report, &cancel).await {
-                Ok(outcome) => return Ok(outcome),
-                Err(error) if error.is::<sftp_transfer::UploadCreateRejected>() => {
-                    // A file may have appeared after the first lookup. Still ask
-                    // before replacing it, without retrying a write or a timeout.
-                    match timeout(Duration::from_secs(60), sftp.symlink_metadata(&target)).await {
-                        Ok(Ok(metadata)) => metadata,
-                        _ => return Err(error),
-                    }
-                },
-                Err(error) => return Err(error),
-            }
-        },
-        Err(error) => return Err(error.into()),
-    };
-    if !before.is_regular() || before.is_symlink() { bail!("同名目标不是普通文件，不能覆盖目录或符号链接"); }
-    if !confirm(app, live, task, name, &target, events).await? { bail!("用户取消覆盖"); }
-    let connection = live.connection.get().ok_or_else(|| anyhow!("会话已断开"))?;
-    let raw = timeout(Duration::from_secs(25), rename_channel(connection)).await.context("建立文件替换通道超时")??;
-    let result = async {
-        let temporary_name = format!(".orbitshell-upload-{}.tmp", Uuid::new_v4());
-        let mut temporary = RemoteTemporary { sftp: sftp.clone(), path: format!("{}/{temporary_name}", directory.trim_end_matches('/')), armed: false };
-        let uploaded = sftp_transfer::upload(live, source, &directory, &temporary_name, Some(0o600), |mut event| { event.name = name.into(); report(event); }, &cancel).await?;
-        temporary.armed = true;
-        // Match the existing owner's permissions before committing the complete file.
-        let owner = sftp.symlink_metadata(&temporary.path).await?;
-        let ownership_changed = owner.uid != before.uid || owner.gid != before.gid;
-        if ownership_changed && (before.uid.is_none() || before.gid.is_none()) { bail!("无法确认原文件的属主与属组，已停止覆盖"); }
-        sftp.set_metadata(&temporary.path, FileAttributes { uid: if ownership_changed { before.uid } else { None },
-            gid: if ownership_changed { before.gid } else { None }, permissions: before.permissions, ..FileAttributes::empty() }).await
-            .context("无法保留原文件的权限或属主，已停止覆盖")?;
-        let latest = sftp.symlink_metadata(&target).await?;
-        if !latest.is_regular() || latest.is_symlink() || latest.size != before.size || latest.mtime != before.mtime ||
-            latest.permissions != before.permissions || latest.uid != before.uid || latest.gid != before.gid {
-            bail!("目标文件在确认后发生变化，已停止覆盖，请刷新目录后重新确认");
-        }
-        if live.cancel.is_cancelled() { bail!("会话已断开，未提交覆盖文件"); }
-        task.message(app, "正在提交覆盖文件");
-        let mut payload = Vec::new();
-        for path in [&temporary.path, &target] { payload.extend_from_slice(&(path.len() as u32).to_be_bytes()); payload.extend_from_slice(path.as_bytes()); }
-        match timeout(Duration::from_secs(60), raw.extended("posix-rename@openssh.com", payload)).await.context("文件覆盖结果未确认，请核对远程文件后再决定是否重试")?? {
-            Packet::Status(status) if status.status_code == StatusCode::Ok => {},
-            _ => bail!("远程文件覆盖未成功，请核对目标文件"),
-        }
-        temporary.armed = false;
-        Ok(Outcome { name: name.into(), bytes: uploaded.bytes, local_path: source.into(), remote_path: target })
-    }.await;
-    let _ = raw.close_session();
-    result
+    sftp_transfer::upload_with_confirmation(
+        live, source, directory, name,
+        |event| { task.progress(app, event.clone()); let _ = events.send(UploadEvent::Progress { progress: event }); },
+        |target| async move { confirm(app, live, task, name, &target, events).await },
+        || task.message(app, "正在提交覆盖文件"),
+        &cancel,
+    ).await
 }
-
 #[tauri::command]
 pub async fn sftp_upload(session_id: String, transfer_id: String, directory: String, local_path: Option<String>, progress: Channel<UploadEvent>, app: AppHandle) -> Result<Option<TransferResult>, String> {
     let live = app.state::<AppState>().session(&session_id)?;

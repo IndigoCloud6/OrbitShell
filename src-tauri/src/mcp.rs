@@ -42,7 +42,7 @@ pub struct McpStatus { enabled: bool, url: Option<String>, token: String, tools:
 pub fn mcp_status(app: AppHandle) -> Result<McpStatus, String> {
     let state = app.state::<AppState>();
     let enabled = state.mcp_enabled.load(Ordering::Acquire);
-    let store = state.storage.store.lock().map_err(|_| "配置暂不可用")?;
+    let store = state.storage.lock().map_err(|_| "配置暂不可用")?;
     let startup_error = state.mcp_startup_error.lock().map_err(|_| "MCP 状态不可用")?.clone();
     Ok(McpStatus { enabled, url: enabled.then(|| format!("http://127.0.0.1:{PORT}/mcp")), token: store.mcp_token.clone(), auto_start: store.mcp_auto_start,
         startup_error, tools: registered_tool_names(), protocol_version: CONTROL_PROTOCOL.into() })
@@ -53,7 +53,7 @@ pub fn notify_status(app: &AppHandle) { let _ = app.emit_to("main", "orbitshell:
 #[tauri::command]
 pub fn mcp_set_auto_start(auto_start: bool, app: AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
-    let mut store = state.storage.store.lock().map_err(|_| "配置暂不可用")?;
+    let mut store = state.storage.lock().map_err(|_| "配置暂不可用")?;
     let mut next = store.clone(); next.mcp_auto_start = auto_start;
     state.storage.persist(&next).map_err(|_| "MCP 启动方式保存失败")?;
     *store = next; drop(store); notify_status(&app); Ok(())
@@ -81,7 +81,7 @@ pub async fn mcp_set_enabled(enabled: bool, app: AppHandle) -> Result<(), String
     if ["take_over_session", "release_session", "upload_file", "download_file", "get_file_transfer"].iter().any(|required| !tools.iter().any(|name| name.as_str() == *required)) {
         return Err("MCP 工具路由不完整，缺少终端控制或文件传输工具，服务未启动。".into());
     }
-    let token = state.storage.store.lock().map_err(|_| "配置暂不可用")?.mcp_token.clone();
+    let token = state.storage.lock().map_err(|_| "配置暂不可用")?.mcp_token.clone();
     if token.is_empty() { return Err("MCP 访问令牌尚未初始化".into()); }
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", PORT)).await.map_err(|_| format!("无法使用本机 {PORT} 端口，请先关闭占用该端口的程序"))?;
     if state.desktop.exiting.load(Ordering::Acquire) { return Err("程序正在退出，未启动 MCP".into()); }
@@ -301,7 +301,7 @@ impl OrbitTools {
     fn list_connections(&self) -> Result<CallToolResult, McpError> {
         self.ensure_enabled()?;
         let state = self.app.state::<AppState>();
-        let store = state.storage.store.lock().map_err(failure)?;
+        let store = state.storage.lock().map_err(failure)?;
         let profiles: Vec<_> = store.connections.iter().map(|profile| json!({
             "id": profile.id, "name": profile.name, "group": profile.group,
             "hostname": profile.hostname, "port": profile.port, "authMethod": profile.auth_method,
@@ -338,7 +338,7 @@ impl OrbitTools {
         self.ensure_enabled()?;
         let profile = {
             let state = self.app.state::<AppState>();
-            let store = state.storage.store.lock().map_err(failure)?;
+            let store = state.storage.lock().map_err(failure)?;
             store.connections.iter().find(|profile| profile.id == args.connection_id).cloned().ok_or_else(|| failure("Connection not found"))?
         };
         if !supplied_credential {

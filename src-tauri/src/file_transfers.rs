@@ -1,6 +1,6 @@
 use crate::{sftp_transfer::{self, Outcome, TransferProgress}, ssh::LiveSession, AppState};
 use serde::{Deserialize, Serialize};
-use std::{fs, io::Write, path::{Path, PathBuf}, sync::{Arc, Mutex, atomic::Ordering}, time::{Instant, SystemTime, UNIX_EPOCH}};
+use std::{fs, io::Write, path::PathBuf, sync::{Arc, Mutex, atomic::Ordering}, time::{Instant, SystemTime, UNIX_EPOCH}};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -183,8 +183,8 @@ impl Transfers {
     }
     pub fn start(&self, app: AppHandle, agent_id: &str, session_id: &str, direction: Direction,
         local_path: String, remote_path: String) -> Result<Transfer, String> {
-        validate_remote_path(&remote_path, matches!(direction, Direction::Download))?;
-        let local = validate_local_path(&local_path)?;
+        sftp_transfer::validate_remote_path(&remote_path, matches!(direction, Direction::Download))?;
+        let local = sftp_transfer::local_file_path(&local_path)?;
         let state = app.state::<AppState>();
         if !state.mcp_enabled.load(Ordering::Acquire) || state.desktop.exiting.load(Ordering::Acquire) { return Err("MCP 已关闭或程序正在退出，未发起传输".into()); }
         let epoch = state.mcp_epoch.load(Ordering::Acquire);
@@ -208,7 +208,7 @@ impl Transfers {
             if !state.mcp_enabled.load(Ordering::Acquire) || state.mcp_epoch.load(Ordering::Acquire) != epoch { task.cancel.cancel(); }
             let result = async {
                 if task.cancel.is_cancelled() || live.cancel.is_cancelled() { anyhow::bail!("传输已停止"); }
-                let local = prepare_local_path(&local, direction).await?;
+                let local = sftp_transfer::resolve_local_file(&local, matches!(direction, Direction::Download)).await?;
                 let progress = |event| task.progress(&app, event);
                 match direction {
                     Direction::Upload => sftp_transfer::upload(&live, &local, &remote_path, &name, None, progress, &task.cancel).await,
@@ -219,49 +219,6 @@ impl Transfers {
         });
         Ok(initial)
     }
-}
-
-fn validate_remote_path(path: &str, file: bool) -> Result<(), String> {
-    if !path.starts_with('/') || path.len() > 4096 || path.chars().any(char::is_control) {
-        return Err("请提供 SFTP 中的绝对路径，不支持相对路径、控制字符或超过 4096 字节的路径".into());
-    }
-    if file && path.rsplit('/').next().is_none_or(|name| name.is_empty() || matches!(name, "." | "..")) { return Err("下载路径必须指向具体文件".into()); }
-    Ok(())
-}
-
-fn validate_local_path(value: &str) -> Result<PathBuf, String> {
-    let path = PathBuf::from(value);
-    if !path.is_absolute() || value.len() > 32767 || value.chars().any(char::is_control) || path.file_name().is_none() {
-        return Err("请提供 OrbitShell 所在电脑上的完整文件路径，不支持相对路径或控制字符".into());
-    }
-    #[cfg(windows)]
-    {
-        use std::path::{Component, Prefix};
-        if !matches!(path.components().next(), Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))) {
-            return Err("本机路径只支持本地磁盘文件，不支持设备或网络共享路径".into());
-        }
-        if path.components().any(|part| matches!(part, Component::Normal(name) if name.to_string_lossy().contains(':'))) { return Err("不支持 Windows 备用数据流路径".into()); }
-    }
-    Ok(path)
-}
-
-async fn prepare_local_path(path: &Path, direction: Direction) -> anyhow::Result<PathBuf> {
-    let prepared = match direction {
-        Direction::Upload => tokio::fs::canonicalize(path).await?,
-        Direction::Download => {
-            match tokio::fs::symlink_metadata(path).await {
-                Ok(_) => anyhow::bail!("本机已存在同名目标，请选择新的文件名；未覆盖原文件"),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
-                Err(error) => return Err(error.into()),
-            }
-            let parent = tokio::fs::canonicalize(path.parent().ok_or_else(|| anyhow::anyhow!("本机保存目录无效"))?).await?;
-            if !tokio::fs::metadata(&parent).await?.is_dir() { anyhow::bail!("本机保存位置不是目录"); }
-            parent.join(path.file_name().ok_or_else(|| anyhow::anyhow!("本机保存文件名无效"))?)
-        }
-    };
-    // Recheck resolved paths so junctions cannot redirect local-only access to network/device paths.
-    validate_local_path(prepared.to_str().ok_or_else(|| anyhow::anyhow!("本机文件路径编码无效"))?).map_err(anyhow::Error::msg)?;
-    Ok(prepared)
 }
 
 #[tauri::command]

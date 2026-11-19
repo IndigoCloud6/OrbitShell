@@ -1,6 +1,5 @@
 mod ssh;
 mod storage;
-mod credentials;
 mod launch;
 mod mcp;
 mod executions;
@@ -18,13 +17,13 @@ mod manual_upload;
 mod file_drag;
 
 use anyhow::{anyhow, Context};
+use orbitshell_ssh::{credentials, sftp::RemoteDirectory};
 use sftp_transfer::TransferProgress;
 use serde::Serialize;
-use ssh::{ConnectRequest, LiveSession, SessionCommand, SessionEvent, SessionEvents, OutputBuffer};
-use std::{collections::HashMap, sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64}}, time::Duration};
+use ssh::{ConnectRequest, LiveSession, SessionCommand, SessionEvent, SessionEvents};
+use std::{collections::HashMap, sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64}}};
 use storage::{ConnectionProfile, Storage};
 use tauri::{ipc::Channel, AppHandle, Manager, State};
-use tokio::{sync::{mpsc, OnceCell}, time::timeout};
 use tokio_util::sync::CancellationToken;
 
 pub struct AppState {
@@ -54,13 +53,13 @@ impl AppState {
 
 #[tauri::command]
 fn list_connections(state: State<'_, AppState>) -> Result<Vec<ConnectionProfile>, String> {
-    Ok(state.storage.store.lock().map_err(|_| "配置暂不可用")?.connections.clone())
+    Ok(state.storage.lock().map_err(|_| "配置暂不可用")?.connections.clone())
 }
 
 #[tauri::command]
 fn save_connection(mut profile: ConnectionProfile, state: State<'_, AppState>, app: AppHandle) -> Result<ConnectionProfile, String> {
     profile.validate()?;
-    let mut store = state.storage.store.lock().map_err(|_| "配置暂不可用")?;
+    let mut store = state.storage.lock().map_err(|_| "配置暂不可用")?;
     let identity_changed = store.connections.iter().find(|entry| entry.id == profile.id)
         .is_some_and(|existing| !credentials::same_identity(existing, &profile));
     if identity_changed { credentials::forget(&profile.id)?; }
@@ -81,7 +80,7 @@ fn save_connection(mut profile: ConnectionProfile, state: State<'_, AppState>, a
 
 #[tauri::command]
 fn delete_connection(id: String, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
-    let mut store = state.storage.store.lock().map_err(|_| "配置暂不可用")?;
+    let mut store = state.storage.lock().map_err(|_| "配置暂不可用")?;
     credentials::forget(&id)?;
     let mut next = store.clone();
     next.connections.retain(|profile| profile.id != id);
@@ -100,7 +99,7 @@ struct CredentialStatus { available: bool, saved: bool }
 #[tauri::command]
 fn credential_status(profile_id: Option<String>, state: State<'_, AppState>) -> Result<CredentialStatus, String> {
     let Some(profile_id) = profile_id else { return Ok(CredentialStatus {available: credentials::AVAILABLE, saved: false}); };
-    let store = state.storage.store.lock().map_err(|_| "配置暂不可用")?;
+    let store = state.storage.lock().map_err(|_| "配置暂不可用")?;
     let profile = store.connections.iter().find(|profile| profile.id == profile_id).ok_or("连接配置不存在")?;
     Ok(CredentialStatus { available: credentials::AVAILABLE, saved: credentials::load(profile)?.is_some() })
 }
@@ -108,20 +107,20 @@ fn credential_status(profile_id: Option<String>, state: State<'_, AppState>) -> 
 #[tauri::command]
 fn save_connection_credential(profile_id: String, credential: String, state: State<'_, AppState>) -> Result<(), String> {
     let secret = zeroize::Zeroizing::new(credential);
-    let store = state.storage.store.lock().map_err(|_| "配置暂不可用")?;
+    let store = state.storage.lock().map_err(|_| "配置暂不可用")?;
     let profile = store.connections.iter().find(|profile| profile.id == profile_id).ok_or("连接配置不存在")?;
     credentials::save(profile, secret.as_str())
 }
 
 #[tauri::command]
 fn forget_connection_credential(profile_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let _store = state.storage.store.lock().map_err(|_| "配置暂不可用")?;
+    let _store = state.storage.lock().map_err(|_| "配置暂不可用")?;
     credentials::forget(&profile_id)
 }
 
 pub(crate) fn remember_session_credential(app: &AppHandle, profile: &ConnectionProfile, secret: &str) -> Result<(), String> {
     let state = app.state::<AppState>();
-    let store = state.storage.store.lock().map_err(|_| "配置暂不可用")?;
+    let store = state.storage.lock().map_err(|_| "配置暂不可用")?;
     let current = store.connections.iter().find(|entry| entry.id == profile.id)
         .ok_or("连接配置已删除，未保存密码")?;
     if !credentials::same_identity(current, profile) { return Err("连接配置已改变，未保存密码，请重新确认".into()); }
@@ -146,7 +145,7 @@ pub(crate) fn start_session(app: AppHandle, mut request: ConnectRequest, events:
     let state = app.state::<AppState>();
     let mut profile = match &request.profile {
         Some(profile) => profile.clone(),
-        None => state.storage.store.lock().map_err(|_| "配置暂不可用")?.connections
+        None => state.storage.lock().map_err(|_| "配置暂不可用")?.connections
             .iter().find(|profile| profile.id == request.profile_id).cloned().ok_or("连接配置不存在")?,
     };
     profile.validate()?;
@@ -159,20 +158,14 @@ pub(crate) fn start_session(app: AppHandle, mut request: ConnectRequest, events:
         request.credential.zeroize();
         request.credential = std::mem::take(&mut *secret);
     }
-    let (sender, receiver) = mpsc::channel(128);
-    let live = Arc::new(LiveSession {
-        profile: profile.clone(), is_temporary: request.profile.is_some(),
-        connected: AtomicBool::new(false), output: Mutex::new(OutputBuffer::new()),
-        commands: sender, cancel: CancellationToken::new(), trust: Mutex::new(None),
-        verification_error: Mutex::new(None), connection: OnceCell::new(), sftp: OnceCell::new(),
-    });
+    let (live, receiver) = LiveSession::new(profile.clone(), request.profile.is_some());
     let mut sessions = state.sessions.lock().map_err(|_| "会话状态不可用")?;
     if sessions.contains_key(&request.session_id) { return Err("该会话已存在".into()); }
     events.announce(&profile).map_err(|error| error.to_string())?;
     sessions.insert(request.session_id.clone(), live.clone());
     drop(sessions);
     let id = request.session_id.clone();
-    tauri::async_runtime::spawn(ssh::run_session(app.clone(), live, request, profile, events, receiver));
+    tauri::async_runtime::spawn(ssh::run_session(app, live, request, events, receiver));
     Ok(id)
 }
 
@@ -200,8 +193,7 @@ async fn ssh_acknowledge(session_id: String, bytes: usize, state: State<'_, AppS
 #[tauri::command]
 fn ssh_trust_host(session_id: String, accept: bool, state: State<'_, AppState>) -> Result<(), String> {
     let live = state.session(&session_id)?;
-    let answer = live.trust.lock().map_err(|_| "会话状态不可用")?.take().ok_or("确认已过期，请重新连接")?;
-    answer.send(accept).map_err(|_| "确认已过期，请重新连接".into())
+    live.trust_host(accept)
 }
 
 #[tauri::command]
@@ -210,33 +202,10 @@ fn ssh_disconnect(session_id: String, state: State<'_, AppState>) -> Result<(), 
     Ok(())
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RemoteEntry { name: String, path: String, is_directory: bool, is_symlink: bool, size: u64 }
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RemoteDirectory { path: String, entries: Vec<RemoteEntry> }
-
 #[tauri::command]
 async fn sftp_list(session_id: String, path: String, state: State<'_, AppState>) -> Result<RemoteDirectory, String> {
     let live = state.session(&session_id)?;
-    let result = tokio::select! {
-        _ = live.cancel.cancelled() => Err(anyhow!("连接已关闭")),
-        result = async {
-            let sftp = live.sftp().await?;
-            timeout(Duration::from_secs(30), async {
-                let path = sftp.canonicalize(if path.is_empty() { "." } else { &path }).await?;
-                let mut entries: Vec<_> = sftp.read_dir(&path).await?.map(|entry| {
-                    let meta = entry.metadata();
-                    RemoteEntry { name: entry.file_name(), path: entry.path(), is_directory: meta.is_dir(), is_symlink: meta.is_symlink(), size: meta.len() }
-                }).collect();
-                entries.sort_by(|left, right| right.is_directory.cmp(&left.is_directory).then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase())));
-                Ok::<_, anyhow::Error>(RemoteDirectory { path, entries })
-            }).await.context("读取目录超时，请重试")?
-        } => result,
-    };
-    result.map_err(|error| format!("{error:#}"))
+    orbitshell_ssh::sftp::list(&live, &path).await.map_err(|error| format!("{error:#}"))
 }
 
 #[tauri::command]
@@ -248,59 +217,8 @@ async fn sftp_delete_entry(
     is_symlink: bool,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let prefix = format!("{}/", directory.trim_end_matches('/'));
-    let valid_name = path.strip_prefix(prefix.as_str()).is_some_and(|name| {
-        !name.is_empty() && !matches!(name, "." | "..") && !name.contains('/')
-    });
-    if !directory.starts_with('/')
-        || directory.split('/').any(|part| matches!(part, "." | ".."))
-        || !valid_name
-        || path.len() > 4096
-        || path.chars().any(char::is_control)
-    {
-        return Err("只能删除当前目录中的单个有效项目".into());
-    }
-
     let live = state.session(&session_id)?;
-    let sftp = live.sftp().await.map_err(|error| format!("{error:#}"))?;
-    let preflight = async {
-        let actual_directory = sftp.canonicalize(&directory).await?;
-        if actual_directory.trim_end_matches('/') != directory.trim_end_matches('/') {
-            anyhow::bail!("远程目录的实际路径已改变，请刷新列表后重新确认");
-        }
-        let metadata = sftp.symlink_metadata(&path).await?;
-        if metadata.is_dir() != is_directory || metadata.is_symlink() != is_symlink {
-            anyhow::bail!("远程项目的类型已改变，请刷新列表后重新确认");
-        }
-        if !metadata.is_regular() && !is_directory && !is_symlink {
-            anyhow::bail!("此类型的远程项目不支持删除");
-        }
-        Ok::<_, anyhow::Error>(())
-    };
-    tokio::select! {
-        biased;
-        _ = live.cancel.cancelled() => return Err("连接已关闭，未发起删除".into()),
-        result = timeout(Duration::from_secs(30), preflight) => {
-            result.map_err(|_| "读取远程项目信息超时，未发起删除")?
-                .map_err(|error| format!("{error:#}"))?;
-        }
-    }
-
-    // RMDIR is non-recursive. REMOVE unlinks the entry itself, including symlinks.
-    let remove = async {
-        if is_directory && !is_symlink {
-            sftp.remove_dir(&path).await.context("无法删除目录，请确认目录为空且拥有删除权限")
-        } else {
-            sftp.remove_file(&path).await.context("远程服务器未确认删除成功")
-        }
-    };
-    tokio::select! {
-        biased;
-        _ = live.cancel.cancelled() => Err("连接已断开，无法确认删除结果。请重新连接后刷新目录。".into()),
-        result = timeout(Duration::from_secs(30), remove) => result
-            .map_err(|_| "删除响应超时，无法确认结果。请刷新目录后查看。".to_string())?
-            .map_err(|error| format!("{error:#}")),
-    }
+    orbitshell_ssh::sftp::delete_entry(&live, &directory, &path, is_directory, is_symlink).await
 }
 
 #[derive(Serialize)]
@@ -338,9 +256,9 @@ pub fn run() {
         .setup(|app| {
             let storage = Storage::open(app.path().app_data_dir()?)?;
             let history = command_history::History::open(app.path().app_data_dir()?);
-            let mcp_auto_start = storage.store.lock().map_err(|_| anyhow!("配置暂不可用"))?.mcp_auto_start;
+            let mcp_auto_start = storage.lock().map_err(|_| anyhow!("配置暂不可用"))?.mcp_auto_start;
             let close_to_tray = {
-                let mut store = storage.store.lock().map_err(|_| anyhow!("配置暂不可用"))?;
+                let mut store = storage.lock().map_err(|_| anyhow!("配置暂不可用"))?;
                 if store.mcp_token.is_empty() {
                     store.mcp_token = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
                     storage.persist(&store)?;

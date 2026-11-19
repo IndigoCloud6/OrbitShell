@@ -73,7 +73,7 @@ pub fn record_connected(app: &AppHandle, session: &LiveSession, session_id: &str
             return Ok(());
         }
 
-        let mut store = state.storage.store.lock().map_err(|_| "最近会话未能保存到本机")?;
+        let mut store = state.storage.lock().map_err(|_| "最近会话未能保存到本机")?;
         let Some(current) = store.connections.iter().find(|current| current.id == profile.id && credentials::same_identity(current, profile)) else { return Ok(()); };
         let entry = saved_entry(current, time, Some(session_id.into()));
         let mut next = store.clone();
@@ -100,7 +100,7 @@ pub fn record_connected(app: &AppHandle, session: &LiveSession, session_id: &str
 
 #[tauri::command]
 pub fn list_recent_connections(state: State<'_, AppState>) -> Result<RecentSnapshot, String> {
-    let store = state.storage.store.lock().map_err(|_| "最近会话暂不可用")?;
+    let store = state.storage.lock().map_err(|_| "最近会话暂不可用")?;
     let runtime = state.recent.runtime.lock().map_err(|_| "最近会话暂不可用")?;
     let mut entries = HashMap::new();
     for stamp in &store.recent_connections {

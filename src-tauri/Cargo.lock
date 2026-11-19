@@ -3224,7 +3224,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
- "keyring",
+ "orbitshell-ssh",
  "percent-encoding",
  "rfd",
  "rmcp",
@@ -3246,6 +3246,29 @@ dependencies = [
  "windows",
  "windows-core",
  "windows-sys 0.61.2",
+ "zeroize",
+]
+
+[[package]]
+name = "orbitshell-ssh"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "keyring",
+ "percent-encoding",
+ "russh",
+ "russh-sftp",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "url",
+ "uuid",
+ "windows",
+ "windows-core",
  "zeroize",
 ]
 

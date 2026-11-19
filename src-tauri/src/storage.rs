@@ -1,47 +1,13 @@
+pub use orbitshell_ssh::ConnectionProfile;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fs, io::Write, path::PathBuf, sync::Mutex};
-use uuid::Uuid;
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConnectionProfile {
-    pub id: String,
-    pub name: String,
-    pub group: String,
-    pub hostname: String,
-    pub port: u16,
-    pub username: String,
-    pub auth_method: String,
-    pub private_key_path: Option<String>,
-}
-
-impl ConnectionProfile {
-    pub fn validate(&mut self) -> Result<(), String> {
-        self.name = self.name.trim().to_owned();
-        self.group = self.group.trim().to_owned();
-        self.hostname = self.hostname.trim().trim_matches(['[', ']']).to_owned();
-        self.username = self.username.trim().to_owned();
-        if self.id.is_empty() { self.id = Uuid::new_v4().to_string(); }
-        Uuid::parse_str(&self.id).map_err(|_| "连接标识无效")?;
-        if self.name.is_empty() || self.name.len() > 160 { return Err("请填写有效的连接名称".into()); }
-        if self.group.is_empty() { self.group = "未分组".into(); }
-        if self.group.len() > 120 { return Err("分组名称过长".into()); }
-        if self.hostname.is_empty() || self.hostname.len() > 253 || self.hostname.chars().any(char::is_whitespace) {
-            return Err("请填写有效的服务器地址".into());
-        }
-        if self.port == 0 || self.username.is_empty() || self.username.len() > 4096 {
-            return Err("请填写有效的端口和用户名".into());
-        }
-        if !matches!(self.auth_method.as_str(), "password" | "privateKey") {
-            return Err("不支持的认证方式".into());
-        }
-        if self.auth_method == "privateKey" && self.private_key_path.as_deref().unwrap_or("").trim().is_empty() {
-            return Err("请选择私钥文件".into());
-        }
-        if self.auth_method == "password" { self.private_key_path = None; }
-        Ok(())
-    }
-}
+use std::{
+    collections::HashMap,
+    fs,
+    ops::{Deref, DerefMut},
+    path::{Path, PathBuf},
+    sync::{Mutex, MutexGuard},
+};
+use zeroize::Zeroizing;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Store {
@@ -59,32 +25,73 @@ pub struct Store {
     pub desktop: crate::desktop::DesktopPreferences,
     #[serde(default)]
     pub recent_connections: Vec<crate::recent::RecentStamp>,
+    #[serde(default)]
+    pub gpui_workspace_migrated: bool,
+    #[serde(default)]
+    pub gpui_linux_quick_commands_seeded: bool,
+    #[serde(default)]
+    pub gpui_linux_quick_commands_version: u64,
 }
 
 pub struct Storage {
     pub path: PathBuf,
-    pub store: Mutex<Store>,
+    store: Mutex<Store>,
+}
+
+pub struct LockedStore<'a> {
+    store: MutexGuard<'a, Store>,
+    _file_lock: fs::File,
+}
+
+impl Deref for LockedStore<'_> {
+    type Target = Store;
+
+    fn deref(&self) -> &Store {
+        &self.store
+    }
+}
+
+impl DerefMut for LockedStore<'_> {
+    fn deref_mut(&mut self) -> &mut Store {
+        &mut self.store
+    }
 }
 
 impl Storage {
     pub fn open(directory: PathBuf) -> anyhow::Result<Self> {
         fs::create_dir_all(&directory)?;
         let path = directory.join("workspace.json");
-        let store = match fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Store::default(),
-            Err(error) => return Err(error.into()),
-        };
-        Ok(Self { path, store: Mutex::new(store) })
+        let store = read_store(&path)?;
+        Ok(Self {
+            path,
+            store: Mutex::new(store),
+        })
+    }
+
+    pub fn lock(&self) -> anyhow::Result<LockedStore<'_>> {
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| anyhow::anyhow!("配置暂不可用"))?;
+        let file_lock = orbitshell_ssh::lock_workspace(&self.path)?;
+        // GPUI can update connections while this process is open.
+        *store = read_store(&self.path)?;
+        Ok(LockedStore {
+            store,
+            _file_lock: file_lock,
+        })
     }
 
     // Replace the file only after the complete new document has reached disk.
     pub fn persist(&self, store: &Store) -> anyhow::Result<()> {
-        let directory = self.path.parent().ok_or_else(|| anyhow::anyhow!("存储目录无效"))?;
-        let mut file = tempfile::NamedTempFile::new_in(directory)?;
-        file.write_all(&serde_json::to_vec_pretty(store)?)?;
-        file.as_file().sync_all()?;
-        file.persist(&self.path)?;
-        Ok(())
+        orbitshell_ssh::write_workspace(&self.path, store)
+    }
+}
+
+fn read_store(path: &Path) -> anyhow::Result<Store> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(serde_json::from_slice(&Zeroizing::new(bytes))?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Store::default()),
+        Err(error) => Err(error.into()),
     }
 }

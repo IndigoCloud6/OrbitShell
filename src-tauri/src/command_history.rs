@@ -1,23 +1,16 @@
+use crate::command_guard::sensitive;
 use crate::{ssh::LiveSession, AppState};
-use serde::{Deserialize, Serialize};
-use std::{collections::VecDeque, fs, io::Write, path::PathBuf, sync::{Mutex, atomic::{AtomicBool, AtomicU64, Ordering}}, time::{SystemTime, UNIX_EPOCH}};
+use serde::Serialize;
+use std::{collections::VecDeque, path::PathBuf, sync::{Mutex, atomic::{AtomicBool, AtomicU64, Ordering}}, time::{SystemTime, UNIX_EPOCH}};
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 const LIMIT: usize = 10000;
 const BYTE_LIMIT: usize = 8 * 1024 * 1024;
 
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Entry {
-    pub id: String, pub host_key: String, pub hostname: String, pub port: u16, pub username: String,
-    pub session_name: String, pub source: String, pub agent_name: Option<String>, pub command: String,
-    pub created_at: u64, pub redacted: bool, pub temporary: bool,
-}
+pub use orbitshell_ssh::command_history::Entry;
 #[derive(Clone)]
 struct Context { host_key: String, hostname: String, port: u16, username: String, name: String, temporary: bool }
-#[derive(Default, Serialize, Deserialize)]
-struct Saved { entries: VecDeque<Entry> }
 pub struct History {
     path: PathBuf, entries: Mutex<VecDeque<Entry>>, contexts: Mutex<VecDeque<(String, Context)>>,
     file_lock: Mutex<()>, revision: AtomicU64, saving: AtomicBool, error: Mutex<String>, load_failed: bool,
@@ -26,12 +19,10 @@ pub struct History {
 impl History {
     pub fn open(directory: PathBuf) -> Self {
         let path = directory.join("command-history.json");
-        let result = match fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice::<Saved>(&bytes).map_err(|_| "执行历史文件无法读取，原文件已保留，本次新增记录暂存于内存。".to_string()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Saved::default()),
-            Err(_) => Err("执行历史文件读取失败，本次新增记录暂存于内存。".into()),
+        let (entries, error, load_failed) = match orbitshell_ssh::command_history::read(&path) {
+            Ok(entries) => (entries, String::new(), false),
+            Err(_) => (VecDeque::new(), "执行历史文件无法读取，原文件已保留，本次新增记录暂存于内存。".into(), true),
         };
-        let (entries, error, load_failed) = match result { Ok(saved) => (saved.entries.into_iter().filter(|entry| !entry.temporary).collect(), String::new(), false), Err(error) => (VecDeque::new(), error, true) };
         Self { path, entries: Mutex::new(entries), contexts: Mutex::new(VecDeque::new()), file_lock: Mutex::new(()), revision: AtomicU64::new(0), saving: AtomicBool::new(false), error: Mutex::new(error), load_failed }
     }
     pub fn register(&self, session_id: &str, live: &LiveSession) {
@@ -78,28 +69,9 @@ impl History {
     pub fn flush(&self) -> Result<(), String> {
         if self.load_failed { return Err("执行历史原文件不可读，未覆盖原文件".into()); }
         let _file = self.file_lock.lock().map_err(|_| "执行历史暂不可写")?;
-        let saved = Saved { entries: self.entries.lock().map_err(|_| "执行历史不可用")?.iter().filter(|e| !e.temporary).cloned().collect() };
-        let directory = self.path.parent().ok_or("执行历史目录无效")?;
-        let result = (|| -> std::io::Result<()> {
-            let mut file = tempfile::NamedTempFile::new_in(directory)?;
-            serde_json::to_writer(&mut file, &saved).map_err(std::io::Error::other)?; file.flush()?; file.as_file().sync_all()?;
-            file.persist(&self.path).map_err(|e| e.error)?; Ok(())
-        })();
-        result.map_err(|_| "执行历史保存失败，新增记录仍在内存中，可稍后重试。".into())
+        let entries: Vec<_> = self.entries.lock().map_err(|_| "执行历史不可用")?.iter().filter(|entry| !entry.temporary).cloned().collect();
+        orbitshell_ssh::command_history::merge(&self.path, entries).map_err(|_| "执行历史保存失败，新增记录仍在内存中，可稍后重试。".into())
     }
-}
-
-fn sensitive(command: &str) -> bool {
-    let lower = command.to_ascii_lowercase();
-    let compact: String = lower.chars().filter(|c| !c.is_whitespace() && !matches!(c, '\'' | '"')).collect();
-    ["ssh://", "b64>>", "sshpass ", "--password", "--passwd", "--token", "--secret", "password=", "passwd=", "token=", "secret=", "api_key=", "apikey=", "authorization:", "bearer ", "private key", "x-api-key", "api-key:", "cookie:"].iter().any(|p| lower.contains(p))
-        || ["password", "passwd", "token", "secret", "api_key", "apikey", "access_key", "accesskey", "private_key"].iter()
-            .any(|key| ["=", ":"].iter().any(|separator| compact.contains(&format!("{key}{separator}"))))
-        || lower.split_whitespace().any(|word| word.split_once("://").is_some_and(|(_, rest)| rest.split('/').next().is_some_and(|authority| authority.contains('@'))))
-        || ((lower.contains("mysql ") || lower.contains("redis-cli ")) && lower.contains(" -p"))
-        || (lower.contains("curl ") && (lower.contains(" -u") || lower.contains(" --user")))
-        || (lower.contains("docker ") && lower.contains("login") && lower.contains(" -p"))
-        || lower.contains("-asplaintext")
 }
 
 #[derive(Serialize)]
@@ -138,6 +110,7 @@ pub fn command_history_retry(app: AppHandle) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use super::*;
 
     #[test]

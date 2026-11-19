@@ -147,7 +147,7 @@ pub fn desktop_status(state: State<'_, AppState>) -> Result<DesktopStatus, Strin
 #[tauri::command]
 pub fn desktop_set_close_to_tray(enabled: bool, state: State<'_, AppState>) -> Result<DesktopStatus, String> {
     if enabled && !state.desktop.tray_ready.load(Ordering::Acquire) { return Err("系统托盘不可用，暂不能启用关闭窗口后后台运行。".into()); }
-    let mut store = state.storage.store.lock().map_err(|_| "设置暂不可用")?;
+    let mut store = state.storage.lock().map_err(|_| "设置暂不可用")?;
     let mut next = store.clone(); next.desktop.close_to_tray = enabled;
     state.storage.persist(&next).map_err(|_| "窗口行为未保存，请重试")?;
     *store = next;
