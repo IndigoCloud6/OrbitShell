@@ -599,7 +599,11 @@ impl Render for TerminalView {
                         grid_size.rows.clamp(5, 300),
                     );
                 }
-                if let Some(remote) = &view.remote {
+                // The release/cancel redraw measures the final bounds even when the local
+                // grid already has that size. Keep intermediate drag frames off bastion PTYs.
+                if let Some(remote) = &view.remote
+                    && !(remote.live.is_temporary && cx.has_active_drag())
+                {
                     let measured = (grid_size.columns as u32, grid_size.rows as u32);
                     remote.size.send_if_modified(|current| {
                         if *current == measured {
