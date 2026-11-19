@@ -37,6 +37,10 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
+#[cfg(test)]
+#[path = "mcp_smoke.rs"]
+mod smoke;
+
 use crate::{
     mcp_terminal::{AgentInfo, AiWorkspace, Binding, Dedicated, TerminalControl},
     ssh_backend::McpCatalog,
