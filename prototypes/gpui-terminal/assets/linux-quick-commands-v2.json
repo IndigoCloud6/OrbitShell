@@ -1,0 +1,121 @@
+{
+  "Linux · Docker 容器": [
+    ["列出运行中的容器", "docker ps"],
+    ["列出所有容器", "docker ps -a"],
+    ["列出已退出的容器", "docker ps -a --filter status=exited"],
+    ["查看容器资源用量快照", "docker stats --no-stream"],
+    ["查看容器状态和退出码（替换容器名）", "docker container inspect --format '{{json .State}}' '替换为容器名'"],
+    ["查看容器最近日志（替换容器名）", "docker logs --tail 100 --timestamps '替换为容器名'"],
+    ["跟踪容器日志（替换容器名）", "docker logs --follow --tail 50 '替换为容器名'"],
+    ["查看容器内进程（替换容器名）", "docker top '替换为容器名'"],
+    ["查看容器端口映射（替换容器名）", "docker port '替换为容器名'"],
+    ["查看容器文件变动（替换容器名）", "docker diff '替换为容器名'"],
+    ["进入容器 Shell（替换容器名）", "docker exec -it '替换为容器名' sh"],
+    ["从镜像启动临时 Shell（替换镜像名）", "docker run --rm -it '替换为镜像名:标签' sh"],
+    ["启动容器（替换容器名）", "docker start '替换为容器名'"],
+    ["停止容器（替换容器名）", "docker stop '替换为容器名'"],
+    ["重启容器（替换容器名）", "docker restart '替换为容器名'"],
+    ["删除已停止的容器（替换容器名）", "docker container rm '替换为容器名'"]
+  ],
+  "Linux · Docker 镜像与存储": [
+    ["查看 Docker 客户端和服务端版本", "docker version"],
+    ["查看 Docker 引擎信息", "docker info"],
+    ["查看当前 Docker 上下文", "docker context show"],
+    ["查看本地镜像", "docker image ls"],
+    ["查看镜像分层历史（替换镜像名）", "docker image history '替换为镜像名:标签'"],
+    ["拉取镜像（替换镜像名）", "docker image pull '替换为镜像名:标签'"],
+    ["构建当前目录镜像（替换镜像名）", "docker build -t '替换为镜像名:标签' ."],
+    ["为镜像添加标签（替换源和目标）", "docker image tag '替换为源镜像:标签' '替换为目标镜像:标签'"],
+    ["删除指定本地镜像（替换镜像名）", "docker image rm '替换为镜像名:标签'"],
+    ["查看 Docker 磁盘占用", "docker system df"],
+    ["查看 Docker 详细磁盘占用", "docker system df --verbose"],
+    ["列出 Docker 网络", "docker network ls"],
+    ["查看 Docker 网络详情（替换网络名）", "docker network inspect '替换为网络名'"],
+    ["列出 Docker 数据卷", "docker volume ls"],
+    ["查看 Docker 数据卷详情（替换卷名）", "docker volume inspect '替换为卷名'"]
+  ],
+  "Linux · Docker Compose": [
+    ["查看 Compose 插件版本", "docker compose version"],
+    ["列出 Compose 项目", "docker compose ls --all"],
+    ["查看当前 Compose 项目的容器", "docker compose ps --all"],
+    ["检查当前 Compose 配置", "docker compose config --quiet"],
+    ["列出 Compose 配置中的服务", "docker compose config --services"],
+    ["列出 Compose 配置中的镜像", "docker compose config --images"],
+    ["查看 Compose 项目近期日志", "docker compose logs --tail 100 --timestamps"],
+    ["查看 Compose 服务日志（替换服务名）", "docker compose logs --tail 100 --timestamps '替换为服务名'"],
+    ["跟踪 Compose 服务日志（替换服务名）", "docker compose logs --follow --tail 50 '替换为服务名'"],
+    ["查看 Compose 服务资源用量", "docker compose stats --no-stream"],
+    ["后台启动 Compose 服务（替换服务名）", "docker compose up -d '替换为服务名'"],
+    ["停止 Compose 服务（替换服务名）", "docker compose stop '替换为服务名'"],
+    ["重启 Compose 服务（替换服务名）", "docker compose restart '替换为服务名'"],
+    ["拉取 Compose 服务镜像（替换服务名）", "docker compose pull '替换为服务名'"],
+    ["构建 Compose 服务镜像（替换服务名）", "docker compose build '替换为服务名'"],
+    ["进入 Compose 服务 Shell（替换服务名）", "docker compose exec '替换为服务名' sh"],
+    ["停止项目并移除容器（替换 Compose 项目名）", "docker compose --project-name '替换为项目名' down"]
+  ],
+  "Linux · systemd": [
+    ["查看 systemd 服务状态（替换服务名）", "systemctl status --no-pager '替换为服务名.service'"],
+    ["查看服务主进程和状态（替换服务名）", "systemctl show --property=MainPID,ActiveState,SubState '替换为服务名.service'"],
+    ["查看 systemd 服务启用状态", "systemctl list-unit-files --type=service --no-pager"],
+    ["查看 systemd 定时器", "systemctl list-timers --all --no-pager"],
+    ["查看本次启动的服务日志（替换服务名）", "journalctl -b -u '替换为服务名.service' -n 100 --no-pager"],
+    ["跟踪服务日志（替换服务名）", "journalctl -f -u '替换为服务名.service' -n 50 --no-pager"],
+    ["启动 systemd 服务（替换服务名）", "systemctl start '替换为服务名.service'"],
+    ["重启 systemd 服务（替换服务名）", "systemctl restart '替换为服务名.service'"]
+  ],
+  "Linux · 网络状态": [
+    ["查看套接字统计摘要", "ss -s"],
+    ["查看已建立的 TCP 连接", "ss -tn state established"],
+    ["查看网络邻居表", "ip neigh show"],
+    ["查看 DNS 解析配置", "cat /etc/resolv.conf"],
+    ["查询主机地址（替换域名）", "getent ahosts '替换为域名'"],
+    ["测试 Ping 连通性（替换目标）", "ping -c 4 -- '替换为域名或 IP'"],
+    ["查看目标使用的路由（替换 IP）", "ip route get '替换为目标 IP'"],
+    ["查看 HTTP 响应头（替换网址）", "curl --head --max-time 10 -- 'https://replace-me.invalid/'"]
+  ],
+  "Linux · 磁盘空间": [
+    ["查看文件系统 inode 用量", "df -ih"],
+    ["查看挂载点和文件系统", "findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS"],
+    ["查看目录总体占用（替换路径）", "du -sh -- '替换为目录路径'"],
+    ["查看磁盘型号、容量和介质类型", "lsblk -d -o NAME,MODEL,SIZE,ROTA"],
+    ["采样磁盘 I/O 统计", "iostat -xz 1 3"]
+  ],
+  "Linux · 系统资源": [
+    ["查看进程和资源用量快照", "top -b -n 1 | head -n 28"],
+    ["查看当前登录用户和活动", "w"],
+    ["查看系统负载原始数据", "cat /proc/loadavg"],
+    ["查看交换空间用量", "swapon --show"],
+    ["查看 NVIDIA GPU 和显存用量", "nvidia-smi"]
+  ],
+  "Linux · 文件目录": [
+    ["识别文件类型（替换路径）", "file -- '替换为文件路径'"],
+    ["查看文件权限和所有者（替换路径）", "ls -ld -- '替换为文件路径'"],
+    ["跟踪文件新增内容（替换路径）", "tail -n 50 -f -- '替换为日志文件路径'"],
+    ["查看 TAR 归档内容（替换路径）", "tar -tf '替换为归档文件路径' | head -n 80"],
+    ["计算文件 SHA-256（替换路径）", "sha256sum -- '替换为文件路径'"]
+  ],
+  "Linux · 系统日志": [
+    ["查看可查询的系统启动记录", "journalctl --list-boots --no-pager"],
+    ["查看系统日志磁盘占用", "journalctl --disk-usage"],
+    ["查看上一轮启动的告警和错误", "journalctl -b -1 -p warning -n 80 --no-pager"]
+  ],
+  "Linux · Git": [
+    ["查看 Git 工作区状态", "git status --short --branch"],
+    ["查看最近 20 条提交", "git --no-pager log --oneline --decorate -20"],
+    ["查看分支和提交图", "git --no-pager log --all --oneline --graph --decorate -30"],
+    ["查看未暂存的修改", "git --no-pager diff"],
+    ["查看暂存区的修改", "git --no-pager diff --staged"],
+    ["查看所有 Git 分支及上游", "git --no-pager branch -avv"],
+    ["查看 Git 暂存记录", "git --no-pager stash list"],
+    ["查看 Git 工作树列表", "git worktree list"],
+    ["查看最后一次提交修改的文件", "git --no-pager show --stat --oneline HEAD"],
+    ["查看某个提交（替换提交号）", "git --no-pager show '替换为提交号'"]
+  ],
+  "Linux · 软件包": [
+    ["查看 Debian 系可升级软件包", "apt list --upgradable"],
+    ["查看已安装的 Debian 软件包", "dpkg-query -W | head -n 80"],
+    ["查看 Debian 软件包信息（替换包名）", "dpkg-query -s '替换为软件包名'"],
+    ["查看已安装的 RPM 软件包", "rpm -qa | sort | head -n 80"],
+    ["查看 RPM 软件包信息（替换包名）", "rpm -qi '替换为软件包名'"]
+  ]
+}

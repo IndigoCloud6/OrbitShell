@@ -1,0 +1,26 @@
+%YAML 1.2
+---
+name: OrbitShell TOML
+scope: source.orbitshell-toml
+contexts:
+  main:
+    - match: '#.*$'
+      scope: comment.line.number-sign.toml
+    - match: '^\s*(\[\[?[^\]\n]+\]\]?)'
+      captures:
+        1: keyword.other.section.toml
+    - match: '(?:^|(?<=[{,]))\s*((?:[A-Za-z0-9_.-]+|"[^"]+"|''[^'']+'')(?:\s*\.\s*[A-Za-z0-9_.-]+)*)\s*='
+      captures:
+        1: variable.other.property.toml
+    - match: "(\"\"\"|'''|\"|')"
+      scope: punctuation.definition.string.begin.toml
+      push:
+        - meta_scope: string.quoted.toml
+        - match: '\\.'
+          scope: constant.character.escape.toml
+        - match: '\1'
+          pop: true
+    - match: '\b(?:true|false|inf|nan)\b'
+      scope: constant.language.toml
+    - match: '[+-]?\b\d[\d_.:+TtZz-]*(?:[eE][+-]?\d+)?\b'
+      scope: constant.numeric.toml

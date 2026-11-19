@@ -1,0 +1,27 @@
+%YAML 1.2
+---
+name: OrbitShell Nginx
+scope: source.nginx
+contexts:
+  main:
+    - match: '#.*$'
+      scope: comment.line.number-sign.nginx
+    - match: "([\"'])"
+      scope: punctuation.definition.string.begin.nginx
+      push:
+        - meta_scope: string.quoted.nginx
+        - match: '\\.'
+          scope: constant.character.escape.nginx
+        - match: '\$[a-zA-Z_][a-zA-Z0-9_]*|\$\{[a-zA-Z0-9_]+\}'
+          scope: variable.other.property.nginx
+        - match: '\1'
+          pop: true
+    - match: '(?:^|(?<=[;{}]))[ \t]*([a-zA-Z_][a-zA-Z0-9_]*)'
+      captures:
+        1: keyword.other.directive.nginx
+    - match: '\$[a-zA-Z_][a-zA-Z0-9_]*|\$\{[a-zA-Z0-9_]+\}'
+      scope: variable.other.property.nginx
+    - match: '\b(?:on|off)\b'
+      scope: constant.language.nginx
+    - match: '\b\d+(?:\.\d+)?(?:[kKmMgG]|ms|[smhd])?\b'
+      scope: constant.numeric.nginx

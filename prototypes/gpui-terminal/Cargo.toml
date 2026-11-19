@@ -1,0 +1,38 @@
+[package]
+name = "orbitshell-gpui-terminal"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+default-run = "orbitshell-gpui-terminal"
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }
+orbitshell-ssh = { path = "../../crates/orbitshell-ssh" }
+alacritty_terminal = { version = "=0.26.0", default-features = false }
+gpui = { version = "=0.2.2", default-features = false, features = ["windows-manifest"] }
+fancy-regex = "=0.16.2"
+regex = "1"
+rmcp = { version = "=3.9.0", features = ["server", "macros", "transport-streamable-http-server"] }
+rust-embed = { version = "8.14", features = ["debug-embed", "include-exclude"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+subtle = "2"
+syntect = { version = "=5.3.0", default-features = false, features = ["default-syntaxes", "regex-fancy", "yaml-load"] }
+unicode-segmentation = "1"
+unicode-width = "0.2"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+uuid = { version = "1", features = ["v4"] }
+zeroize = "1"
+
+[build-dependencies]
+embed-resource = "=3.0.12"
+
+[target.'cfg(windows)'.dependencies]
+image = { version = "=0.25.10", default-features = false, features = ["png"] }
+raw-window-handle = "0.6"
+tray-icon = { version = "=0.25.1", default-features = false }
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_System_DataExchange", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

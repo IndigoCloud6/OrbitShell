@@ -1,0 +1,11 @@
+%YAML 1.2
+---
+name: OrbitShell TypeScript
+scope: source.orbitshell-ts
+contexts:
+  main:
+    - match: '\b(?:abstract|as|asserts|declare|enum|implements|infer|interface|keyof|namespace|never|override|private|protected|public|readonly|satisfies|type|unknown)\b'
+      scope: keyword.other.typescript
+    - match: '\b(?:any|bigint|boolean|number|object|string|symbol|undefined|void)\b'
+      scope: support.type.typescript
+    - include: scope:source.js

@@ -1,0 +1,21 @@
+%YAML 1.2
+---
+name: OrbitShell Properties
+scope: source.orbitshell-properties
+contexts:
+  main:
+    - match: '^\s*[#!;].*$'
+      scope: comment.line.properties
+    - match: '^\s*(\[[^\]\n]+\])'
+      captures:
+        1: keyword.other.section.properties
+    - match: '^\s*(?:export\s+)?([^\s:=]+)\s*[:=]'
+      captures:
+        1: variable.other.property.properties
+      push: value
+  value:
+    - meta_scope: string.unquoted.properties
+    - match: '\\.'
+      scope: constant.character.escape.properties
+    - match: '\n|$'
+      pop: true

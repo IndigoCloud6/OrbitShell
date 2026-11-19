@@ -7,6 +7,7 @@ dist/
 # Rust / Tauri 构建产物与生成的 schema
 /src-tauri/target/
 /src-tauri/gen/schemas/
+/prototypes/gpui-terminal/target/
 
 # 测试覆盖率报告
 coverage/
