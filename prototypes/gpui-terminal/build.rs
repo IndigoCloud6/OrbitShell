@@ -5,7 +5,7 @@ fn main() {
         return;
     }
 
-    let icon = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/icons/icon.ico");
+    let icon = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/orbitshell.ico");
     let resource = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo must set OUT_DIR"))
         .join("orbitshell-icon.rc");
     println!("cargo:rerun-if-changed={}", icon.display());

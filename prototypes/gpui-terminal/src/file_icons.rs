@@ -7,7 +7,7 @@ use serde::Deserialize;
 const PREFIX: &str = "material/";
 
 #[derive(RustEmbed)]
-#[folder = "../../src/assets/file-icons/material/"]
+#[folder = "assets/material/"]
 #[prefix = "material/"]
 #[include = "*.svg"]
 pub struct MaterialAssets;
@@ -48,7 +48,7 @@ impl Manifest {
         self.lookup(|rules| &rules.file_names, name)
             .or_else(|| name.starts_with(".env.").then_some("settings"))
             .or_else(|| {
-                // Compare each suffix from longest to shortest, as the Tauri file browser does.
+                // Compare each suffix from longest to shortest.
                 name.match_indices('.').find_map(|(dot, _)| {
                     self.lookup(|rules| &rules.file_extensions, &name[dot + 1..])
                 })
@@ -58,10 +58,7 @@ impl Manifest {
 }
 
 static MANIFEST: LazyLock<Manifest> = LazyLock::new(|| {
-    serde_json::from_str(include_str!(
-        "../../../src/assets/file-icons/material/associations.json"
-    ))
-    .unwrap_or_default()
+    serde_json::from_str(include_str!("../assets/material/associations.json")).unwrap_or_default()
 });
 
 pub fn file_icon(name: &str, directory: bool) -> impl IntoElement {

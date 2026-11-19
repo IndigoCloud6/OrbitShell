@@ -25,7 +25,7 @@ pub(crate) struct Tray(TrayIcon);
 
 impl Tray {
     pub(crate) fn new(actions: UnboundedSender<DesktopAction>) -> anyhow::Result<Self> {
-        let asset = include_bytes!("../../../src-tauri/icons/32x32.png");
+        let asset = include_bytes!("../assets/orbitshell-32.png");
         let image =
             image::load_from_memory_with_format(asset, image::ImageFormat::Png)?.into_rgba8();
         let (width, height) = image.dimensions();

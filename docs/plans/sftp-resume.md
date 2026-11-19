@@ -51,10 +51,9 @@
 
 ## 后续实施入口
 
-- `src-tauri/src/lib.rs`：现有 SFTP 上传、下载及进度复制逻辑。
-- `src-tauri/src/ssh.rs`：会话、取消与 SFTP 生命周期。
-- `src-tauri/src/storage.rs`：可参考现有原子配置保存方式，任务存储保持独立。
-- `src/features/files/transfer-provider.tsx`：传输任务元信息及恢复交互。
-- `src/features/workbench/workspace-tools.tsx`：传输队列与任务操作界面。
+- `crates/orbitshell-ssh/src/transfer.rs` 提供现有上传、下载和真实进度回调。
+- `crates/orbitshell-ssh/src/session.rs` 管理 SSH 会话与 SFTP 生命周期。
+- `prototypes/gpui-terminal/src/ssh_backend.rs` 提供本机配置保存方式的参考。
+- `prototypes/gpui-terminal/src/transfer_queue.rs` 和 `workbench_transfers.rs` 管理传输任务、队列状态与操作界面。
 
 协议参考：[SSH File Transfer Protocol，偏移读写与文件重命名](https://datatracker.ietf.org/doc/html/draft-ietf-secsh-filexfer-03)。

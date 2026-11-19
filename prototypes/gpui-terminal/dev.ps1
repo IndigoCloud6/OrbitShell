@@ -14,12 +14,10 @@ $watchedFiles = @(
     (Join-Path $PSScriptRoot 'build.rs')
     (Join-Path $repo 'crates/orbitshell-ssh/Cargo.toml')
     (Join-Path $repo 'assets/orbitshell.svg')
-    (Join-Path $repo 'src-tauri/icons/icon.ico')
 )
 $watchedDirectories = @(
     (Join-Path $PSScriptRoot 'src')
     (Join-Path $PSScriptRoot 'assets')
-    (Join-Path $repo 'src/assets/file-icons/material')
     (Join-Path $repo 'crates/orbitshell-ssh/src')
 )
 
