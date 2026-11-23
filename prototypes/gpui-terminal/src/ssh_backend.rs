@@ -279,6 +279,13 @@ pub struct McpCatalog {
 }
 
 impl McpCatalog {
+    pub(crate) fn diagnostics_path(&self) -> PathBuf {
+        self.workspace
+            .path
+            .with_file_name("diagnostics")
+            .join("mcp-diagnostics.jsonl")
+    }
+
     pub fn profiles(&self) -> Result<Vec<ConnectionProfile>> {
         Ok(read_workspace(&self.workspace.path)?.connections)
     }

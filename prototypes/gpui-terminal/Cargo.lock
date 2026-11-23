@@ -3913,6 +3913,7 @@ dependencies = [
  "embed-resource",
  "fancy-regex",
  "gpui",
+ "http-body",
  "image",
  "orbitshell-ssh",
  "raw-window-handle",
