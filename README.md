@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/IndigoCloud6/OrbitShell/releases/latest/download/OrbitShell-windows-x64.zip"><img src="https://img.shields.io/badge/Download-Windows%20x64-0969da?style=for-the-badge" alt="Download for Windows x64"></a>
+  <a href="https://github.com/IndigoCloud6/OrbitShell/releases/latest/download/OrbitShell-windows-x64-setup.exe"><img src="https://img.shields.io/badge/Download-Windows%20x64-0969da?style=for-the-badge" alt="Download the Windows x64 installer"></a>
 </p>
 
 <p align="center">
-  Portable ZIP · <a href="https://github.com/IndigoCloud6/OrbitShell/releases/latest">Latest release and checksum</a> · <a href="LICENSE">Apache License 2.0</a>
+  Windows x64 installer · <a href="https://github.com/IndigoCloud6/OrbitShell/releases/latest">Latest release and checksum</a> · <a href="LICENSE">Apache License 2.0</a>
 </p>
 
 ![OrbitShell GPUI workspace with a connection list, SSH terminal, and remote file browser](design/gpui-workbench.png)
@@ -30,9 +30,9 @@
 
 ## Run on Windows
 
-1. Download the [Windows x64 ZIP](https://github.com/IndigoCloud6/OrbitShell/releases/latest/download/OrbitShell-windows-x64.zip) and extract it.
-2. Open `OrbitShell.exe`. For your first connection, compare the SSH host fingerprint with the one provided by your server administrator.
-3. If your bastion host launcher expects an Xshell-style entry point, select the bundled `Xshell.exe`. Keep it beside `OrbitShell.exe` so it can forward the launch arguments.
+1. Download and run the [Windows x64 installer](https://github.com/IndigoCloud6/OrbitShell/releases/latest/download/OrbitShell-windows-x64-setup.exe).
+2. Open **OrbitShell** from the Start menu. For your first connection, compare the SSH host fingerprint with the one provided by your server administrator.
+3. If your bastion host launcher expects an Xshell-style entry point, select `Xshell.exe` in the installation folder.
 
 See the [GPUI workbench guide](prototypes/gpui-terminal/README.md) for bastion host setup, diagnostics, and MCP settings.
 

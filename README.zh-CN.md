@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/IndigoCloud6/OrbitShell/releases/latest/download/OrbitShell-windows-x64.zip"><img src="https://img.shields.io/badge/Download-Windows%20x64-0969da?style=for-the-badge" alt="下载 Windows x64 版"></a>
+  <a href="https://github.com/IndigoCloud6/OrbitShell/releases/latest/download/OrbitShell-windows-x64-setup.exe"><img src="https://img.shields.io/badge/Download-Windows%20x64-0969da?style=for-the-badge" alt="下载 Windows x64 安装包"></a>
 </p>
 
 <p align="center">
-  便携 ZIP · <a href="https://github.com/IndigoCloud6/OrbitShell/releases/latest">最新版与校验值</a> · <a href="LICENSE">Apache 2.0 许可证</a>
+  Windows x64 安装包 · <a href="https://github.com/IndigoCloud6/OrbitShell/releases/latest">最新版与校验值</a> · <a href="LICENSE">Apache 2.0 许可证</a>
 </p>
 
 ![OrbitShell GPUI 工作台，左侧是连接列表，中间是 SSH 终端，右侧是远程文件面板](design/gpui-workbench.png)
@@ -30,9 +30,9 @@
 
 ## 在 Windows 上运行
 
-1. 下载 [Windows x64 ZIP](https://github.com/IndigoCloud6/OrbitShell/releases/latest/download/OrbitShell-windows-x64.zip) 并解压。
-2. 打开 `OrbitShell.exe`。首次连接时，与服务器管理员提供的 SSH 主机指纹核对。
-3. 如果堡垒机助手要求 Xshell 风格的客户端入口，可选择包内的 `Xshell.exe`。让它和 `OrbitShell.exe` 放在同一目录，转接器会转发启动参数。
+1. 下载并运行 [Windows x64 安装包](https://github.com/IndigoCloud6/OrbitShell/releases/latest/download/OrbitShell-windows-x64-setup.exe)。
+2. 从开始菜单打开 **OrbitShell**。首次连接时，与服务器管理员提供的 SSH 主机指纹核对。
+3. 如果堡垒机助手需要 Xshell 风格的客户端入口，选择安装目录下的 `Xshell.exe`。
 
 堡垒机设置、SSH 诊断与 MCP 操作见 [GPUI 工作台使用说明](prototypes/gpui-terminal/README.md)。
 
