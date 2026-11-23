@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::VecDeque,
     fmt,
+    pin::Pin,
     sync::atomic::{AtomicBool, Ordering},
 };
 use std::{
@@ -20,13 +21,64 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    sync::{mpsc, oneshot, OnceCell},
-    time::{sleep_until, timeout, timeout_at, Instant},
+    sync::{mpsc, oneshot, watch, OnceCell},
+    time::{sleep_until, timeout, timeout_at, Instant, Sleep},
 };
 use tokio_util::sync::CancellationToken;
 use zeroize::{Zeroize, Zeroizing};
 
 const OUTPUT_BUDGET: usize = 256 * 1024;
+const BASTION_RESIZE_DELAY: Duration = Duration::from_millis(250);
+
+fn clamp_pty_size((columns, rows): (u32, u32)) -> (u32, u32) {
+    (columns.clamp(20, 500), rows.clamp(5, 300))
+}
+
+pub(crate) struct PtySizeChanges {
+    sizes: watch::Receiver<(u32, u32)>,
+    latest_size: (u32, u32),
+    last_sent_size: (u32, u32),
+    settle_timer: Option<Pin<Box<Sleep>>>,
+}
+
+impl PtySizeChanges {
+    pub(crate) fn new(
+        sizes: watch::Receiver<(u32, u32)>,
+        initial_size: (u32, u32),
+        temporary: bool,
+    ) -> Self {
+        let initial_size = clamp_pty_size(initial_size);
+        Self {
+            sizes,
+            latest_size: initial_size,
+            last_sent_size: initial_size,
+            settle_timer: temporary.then(|| Box::pin(sleep_until(Instant::now()))),
+        }
+    }
+
+    pub(crate) async fn next(&mut self) -> Option<(u32, u32)> {
+        let Some(timer) = &mut self.settle_timer else {
+            self.sizes.changed().await.ok()?;
+            return Some(clamp_pty_size(*self.sizes.borrow_and_update()));
+        };
+
+        // Keep the timer and last measurement across other SSH I/O winning the outer select.
+        loop {
+            tokio::select! {
+                biased;
+                changed = self.sizes.changed() => {
+                    changed.ok()?;
+                    self.latest_size = clamp_pty_size(*self.sizes.borrow_and_update());
+                    timer.as_mut().reset(Instant::now() + BASTION_RESIZE_DELAY);
+                }
+                () = timer.as_mut(), if self.latest_size != self.last_sent_size => {
+                    self.last_sent_size = self.latest_size;
+                    return Some(self.latest_size);
+                }
+            }
+        }
+    }
+}
 
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -151,7 +203,6 @@ pub enum SessionCommand {
         data: Zeroizing<Vec<u8>>,
         complete: oneshot::Sender<std::result::Result<(), String>>,
     },
-    Resize(u32, u32),
     Acknowledge(usize),
 }
 
@@ -507,8 +558,7 @@ async fn establish(
     if let Some(trace) = live.diagnostics.get() {
         trace.bind(channel.id(), "shell");
     }
-    let columns = request.columns.clamp(20, 500);
-    let rows = request.rows.clamp(5, 300);
+    let (columns, rows) = clamp_pty_size((request.columns, request.rows));
     channel
         .request_pty(true, "xterm-256color", columns, rows, 0, 0, &[])
         .await?;
@@ -557,6 +607,7 @@ pub async fn run_session(
     mut request: ConnectRequest,
     events: SessionEvents,
     mut commands: mpsc::Receiver<SessionCommand>,
+    sizes: watch::Receiver<(u32, u32)>,
 ) {
     let profile = &live.profile;
     let result = tokio::select! {
@@ -571,6 +622,11 @@ pub async fn run_session(
             request.credential.zeroize();
             let channel = channel?;
             let (mut reader, writer) = channel.split();
+            let mut sizes = PtySizeChanges::new(
+                sizes,
+                (request.columns, request.rows),
+                live.is_temporary,
+            );
             live.connected.store(true, Ordering::Release);
             hooks.connected(&request.session_id, &live);
             events.send(SessionEvent::Status { status: "connected".into(), message: "已连接".into() })?;
@@ -590,16 +646,15 @@ pub async fn run_session(
                             let result = if owns { writer.data_bytes(data.to_vec()).await.map_err(|_| "AI 输入发送失败".to_string()) } else { Err("AI 接管已结束，输入未发送".into()) };
                             let _ = complete.send(result);
                         },
-                        Some(SessionCommand::Resize(columns, rows)) => {
-                            let columns = columns.clamp(20, 500);
-                            let rows = rows.clamp(5, 300);
-                            writer.window_change(columns, rows, 0, 0).await?;
-                            if let Some(trace) = live.diagnostics.get() {
-                                trace.terminal_size(writer.id(), "window_change_sent", columns, rows);
-                            }
-                        }
                         Some(SessionCommand::Acknowledge(bytes)) => outstanding = outstanding.saturating_sub(bytes),
                         None => break,
+                    },
+                    size = sizes.next() => {
+                        let Some((columns, rows)) = size else { return Ok(()) };
+                        writer.window_change(columns, rows, 0, 0).await?;
+                        if let Some(trace) = live.diagnostics.get() {
+                            trace.terminal_size(writer.id(), "window_change_sent", columns, rows);
+                        }
                     },
                     message = reader.wait(), if outstanding < OUTPUT_BUDGET => match message {
                         Some(ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. }) => {

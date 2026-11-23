@@ -15,10 +15,11 @@ use zeroize::Zeroizing;
 
 use crate::{
     command_guard::{self, ReadOnlyCommand},
-    session::{LiveSession, OutputBuffer},
+    session::{LiveSession, OutputBuffer, PtySizeChanges},
 };
 
 const CAPTURE_LIMIT: usize = 512 * 1024;
+const DEFAULT_PTY_SIZE: (u32, u32) = (120, 36);
 const TERMINAL_ENDED: &str = "AI 终端已结束";
 const INTERRUPT_UNCONFIRMED: &str = "已发出停止请求，等待确认远端退出状态";
 
@@ -104,7 +105,7 @@ impl AiShell {
         client: CancellationToken,
     ) -> Arc<Self> {
         let (input, inputs) = mpsc::channel(8);
-        let (size, sizes) = watch::channel((120, 36));
+        let (size, sizes) = watch::channel(DEFAULT_PTY_SIZE);
         let shell = Arc::new(Self {
             status: Mutex::new(ShellStatus {
                 status: "connecting",
@@ -463,8 +464,8 @@ pub async fn open(
             .request_pty(
                 true,
                 "xterm-256color",
-                120,
-                36,
+                DEFAULT_PTY_SIZE.0,
+                DEFAULT_PTY_SIZE.1,
                 0,
                 0,
                 &[(Pty::ECHO, 0), (Pty::ECHONL, 0)],
@@ -537,7 +538,7 @@ async fn run(
     live: Arc<LiveSession>,
     client: CancellationToken,
     mut inputs: mpsc::Receiver<Input>,
-    mut sizes: watch::Receiver<(u32, u32)>,
+    sizes: watch::Receiver<(u32, u32)>,
 ) {
     let channel = tokio::select! {
         _ = shell.cancel.cancelled() => Err(TERMINAL_ENDED.into()),
@@ -567,6 +568,7 @@ async fn run(
         }
     };
     let (mut reader, writer) = channel.split();
+    let mut sizes = PtySizeChanges::new(sizes, DEFAULT_PTY_SIZE, live.is_temporary);
     shell.update(|state| {
         state.status = "idle";
         state.message = "等待 Agent 指令";
@@ -605,9 +607,8 @@ async fn run(
                     ));
                 }
             }
-            received = sizes.changed() => {
-                if received.is_err() { break "AI 终端已关闭"; }
-                let (columns, rows) = *sizes.borrow_and_update();
+            size = sizes.next() => {
+                let Some((columns, rows)) = size else { break "AI 终端已关闭" };
                 tokio::select! {
                     biased;
                     _ = shell.cancel.cancelled() => break TERMINAL_ENDED,

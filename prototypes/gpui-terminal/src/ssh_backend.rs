@@ -828,10 +828,10 @@ impl Backend {
                 columns: size.0,
                 rows: size.1,
             };
-            session::run_session(scope, running, request, events, commands).await;
+            session::run_session(scope, running, request, events, commands, sizes).await;
         });
         self.runtime
-            .spawn(forward_input(live.clone(), inputs, sizes));
+            .spawn(forward_input(live.clone(), inputs));
         (
             TerminalConnection {
                 id,
@@ -893,26 +893,16 @@ impl Backend {
 async fn forward_input(
     live: Arc<LiveSession>,
     mut input: mpsc::Receiver<Zeroizing<Vec<u8>>>,
-    mut size: watch::Receiver<(u32, u32)>,
 ) {
     let _: Result<(), mpsc::error::SendError<SessionCommand>> = tokio::select! {
         _ = live.cancel.cancelled() => Ok(()),
         result = async {
-            loop {
-                tokio::select! {
-                    input = input.recv() => {
-                        let Some(data) = input else { return Ok(()) };
-                        for chunk in data.chunks(INPUT_CHUNK) {
-                            live.commands.send(SessionCommand::Input { data: chunk.to_vec(), history: None }).await?;
-                        }
-                    }
-                    ready = size.changed() => {
-                        if ready.is_err() { return Ok(()); }
-                        let (columns, rows) = *size.borrow_and_update();
-                        live.commands.send(SessionCommand::Resize(columns, rows)).await?;
-                    }
+            while let Some(data) = input.recv().await {
+                for chunk in data.chunks(INPUT_CHUNK) {
+                    live.commands.send(SessionCommand::Input { data: chunk.to_vec(), history: None }).await?;
                 }
             }
+            Ok(())
         } => result,
     };
 }
