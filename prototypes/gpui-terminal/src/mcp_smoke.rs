@@ -93,6 +93,7 @@ impl<'a> Client<'a> {
         if let Some(error) = reply.get("error") { return Err(error.clone()); }
         let result = &reply["result"];
         if result["isError"].as_bool() == Some(true) { return Err(result.clone()); }
+        if let Some(content) = result.get("structuredContent") { return Ok(content.clone()); }
         Ok(serde_json::from_str(result["content"][0]["text"].as_str().expect("MCP text result")).expect("MCP tool JSON"))
     }
 
@@ -131,10 +132,25 @@ fn mcp_loopback() {
         assert_ne!(client.request("POST", "Origin: https://example.invalid\r\n", Some(json!({}))).await.0, 200);
 
         let indexed = client.rpc("tools/list", json!({})).await;
-        let names: Vec<_> = indexed["result"]["tools"].as_array().unwrap().iter().map(|tool| tool["name"].as_str().unwrap()).collect();
-        for tool in ["list_connections", "list_sessions", "open_connection", "take_over_session", "release_session",
+        let tools = indexed["result"]["tools"].as_array().unwrap();
+        let names: Vec<_> = tools.iter().map(|tool| tool["name"].as_str().unwrap()).collect();
+        for tool in ["list_connections", "list_sessions", "open_connection", "take_over_session", "open_dedicated_terminal", "release_session",
             "send_input", "read_output", "execute_command", "disconnect", "upload_file", "download_file", "get_file_transfer", "list_file_transfers"] {
             assert!(names.contains(&tool), "missing {tool}");
+        }
+        for (name, required) in [
+            ("take_over_session", &["session_id"][..]),
+            ("release_session", &["session_id", "terminal_id"][..]),
+            ("read_output", &["session_id", "terminal_id", "mode"][..]),
+            ("execute_command", &["session_id", "terminal_id", "mode", "command"][..]),
+            ("send_input", &["session_id", "terminal_id", "mode", "data", "append_newline"][..]),
+        ] {
+            let schema = &tools[names.iter().position(|tool| *tool == name).unwrap()]["inputSchema"];
+            let fields = schema["required"].as_array().unwrap();
+            assert_eq!(fields.len(), required.len(), "{name}");
+            for field in required {
+                assert!(fields.contains(&json!(field)), "{name} requires {field}");
+            }
         }
         let found = client.call("list_connections", json!({})).await.unwrap();
         assert_eq!(found["connections"][0]["id"], profile.id);
@@ -177,22 +193,29 @@ fn mcp_loopback() {
         reject.store(true, Ordering::Release);
         assert!(client.call("take_over_session", json!({"session_id":id})).await.is_err());
         assert!(terminal.control.binding().is_none());
-        let bound = client.call("send_input", json!({"session_id":id,"action":"takeover","data":""})).await.unwrap();
+        assert!(client.call("take_over_session", json!({})).await.is_err());
+        let bound = client.call("take_over_session", json!({"session_id":id})).await.unwrap();
         let binding = bound["terminalId"].as_str().unwrap();
+        let read_args = &bound["nextRead"]["arguments"];
         assert_eq!(bound["sent"], false);
         assert_eq!(bound["sharesOriginalTerminal"], true);
         assert!(other.call("take_over_session", json!({"session_id":id})).await.is_err());
-        assert!(other.call("read_output", json!({"session_id":id,"terminal_id":binding,"mode":"takeover"})).await.is_err());
+        assert!(other.call("read_output", read_args.clone()).await.is_err());
+        assert!(client.call("read_output", json!({"session_id":id,"terminal_id":binding})).await.is_err());
+        assert!(client.call("read_output", json!({"session_id":id,"terminal_id":binding,"mode":"dedicated"})).await.is_err());
         reject.store(true, Ordering::Release);
         assert!(client.call("execute_command", json!({"session_id":id,"terminal_id":binding,"mode":"takeover","command":"printf fixture-pty"})).await.is_err());
-        let buffered = client.call("send_input", json!({"session_id":id,"terminal_id":binding,"data":"printf fixture-pty"})).await.unwrap();
+        let empty = client.call("execute_command", json!({})).await.unwrap_err();
+        assert!(empty["content"][0]["text"].as_str().unwrap().contains("nextRead.arguments"));
+        let buffered = client.call("send_input", json!({"session_id":id,"terminal_id":binding,"mode":"takeover","data":"printf fixture-pty","append_newline":false})).await.unwrap();
         assert_eq!(buffered["sent"], false);
         assert_eq!(buffered["buffered"], true);
-        let sent = client.call("send_input", json!({"session_id":id,"terminal_id":binding,"data":"","append_newline":true})).await.unwrap();
+        let submit = json!({"session_id":id,"terminal_id":binding,"mode":"takeover","data":"","append_newline":true});
+        let sent = client.call("send_input", submit).await.unwrap();
         assert_eq!(sent["sent"], true);
         timeout(Duration::from_secs(3), async {
             loop {
-                let read = client.call("read_output", json!({"session_id":id,"terminal_id":binding,"mode":"takeover"})).await.unwrap();
+                let read = client.call("read_output", read_args.clone()).await.unwrap();
                 let out = read["output"].as_str().unwrap();
                 assert_eq!(read["completionKnown"], false);
                 if out.contains("fixture-pty") {
@@ -202,22 +225,24 @@ fn mcp_loopback() {
                 sleep(Duration::from_millis(30)).await;
             }
         }).await.unwrap();
-        assert_eq!(client.call("release_session", json!({"session_id":id})).await.unwrap()["released"], true);
+        assert_eq!(client.call("release_session", bound["nextRelease"]["arguments"].clone()).await.unwrap()["released"], true);
         assert!(terminal.control.binding().is_none());
         assert!(client.call("read_output", json!({"session_id":id,"terminal_id":binding,"mode":"takeover"})).await.is_err());
 
-        let dir = client.call("execute_command", json!({"session_id":id,"mode":"dedicated","command":"cd /fixture"})).await.unwrap();
-        let dedicated = dir["terminalId"].as_str().unwrap();
+        let opened = client.call("open_dedicated_terminal", json!({"session_id":id})).await.unwrap();
+        let dedicated = opened["terminalId"].as_str().unwrap();
+        let dir = client.call("execute_command", json!({"session_id":id,"terminal_id":dedicated,"mode":"dedicated","command":"cd /fixture"})).await.unwrap();
         assert_eq!(dir["exitCode"], 0);
         assert_eq!(dir["sharesOriginalTerminal"], false);
-        let pwd = client.call("execute_command", json!({"session_id":id,"terminal_id":dedicated,"command":"pwd"})).await.unwrap();
+        let pwd_args = json!({"session_id":id,"terminal_id":dedicated,"mode":"dedicated","command":"pwd"});
+        let pwd = client.call("execute_command", pwd_args).await.unwrap();
         assert!(pwd["stdout"].as_str().unwrap().contains("/fixture"));
-        assert_eq!(client.call("execute_command", json!({"session_id":id,"terminal_id":dedicated,"command":"false"})).await.unwrap()["exitCode"], 1);
-        let running = client.call("execute_command", json!({"session_id":id,"terminal_id":dedicated,"command":"sleep 2","timeout_seconds":1})).await.unwrap();
+        assert_eq!(client.call("execute_command", json!({"session_id":id,"terminal_id":dedicated,"mode":"dedicated","command":"false"})).await.unwrap()["exitCode"], 1);
+        let running = client.call("execute_command", json!({"session_id":id,"terminal_id":dedicated,"mode":"dedicated","command":"sleep 2","timeout_seconds":1})).await.unwrap();
         assert_eq!(running["running"], true);
         timeout(Duration::from_secs(4), async {
             loop {
-                let finished = client.call("read_output", json!({"session_id":id,"terminal_id":dedicated})).await.unwrap();
+                let finished = client.call("read_output", opened["nextRead"]["arguments"].clone()).await.unwrap();
                 if finished["completionKnown"] == true {
                     assert!(finished["output"].as_str().unwrap().contains("fixture-finished"));
                     break;

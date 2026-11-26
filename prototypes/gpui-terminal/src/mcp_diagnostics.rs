@@ -24,8 +24,10 @@ const MAX_LOG_BYTES: u64 = 512 * 1024;
 
 const METHODS: &[&str] = &["initialize", "notifications/initialized", "ping", "tools/list", "tools/call"];
 const TOOLS: &[&str] = &[
-    "list_connections", "list_sessions", "open_connection", "take_over_session", "release_session",
-    "read_output", "send_input", "execute_command", "disconnect", "upload_file", "download_file",
+    "list_connections", "list_sessions", "open_connection", "take_over_session",
+    "open_dedicated_terminal", "release_session",
+    "read_output", "send_input", "execute_command",
+    "disconnect", "upload_file", "download_file",
     "get_file_transfer", "list_file_transfers",
 ];
 const FIELDS: &[&str] = &[

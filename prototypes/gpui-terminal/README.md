@@ -26,6 +26,15 @@ cargo run --locked --manifest-path prototypes/gpui-terminal/Cargo.toml
 - **终端查找与快捷指令**按 Ctrl+F 查找终端内容，Enter 和 Shift+Enter 切换匹配。底部「快捷指令」可按组筛选和搜索，将选中的指令填入当前终端。
 - **菜单与设置**顶部提供文件、编辑、视图、会话和帮助菜单。设置可调文件列表密度、隐藏文件和终端字号。上传、下载、Agent 状态和堡垒机入口提示当前后端接入状态。
 
+## MCP 终端调用参数
+
+1. 用 `list_sessions` 找到已登录会话，将完整的 `sessionId` 作为 `session_id` 传给 `take_over_session` 或 `open_dedicated_terminal`。前者请求接管原终端，后者打开或复用该会话的独立 AI 终端。
+2. 将回执中的 `nextRead.arguments` 作为 JSON 对象复用。`read_output`、`execute_command` 和 `send_input` 都要求 `session_id`、`terminal_id` 和 `mode`。`mode` 只接受 `takeover` 和 `dedicated`，并须与终端匹配。
+3. `execute_command` 另需 `command` 字符串，并自动提交回车。`send_input` 另需 `data` 字符串和 `append_newline` 布尔值。提交回车传 `true`，只发送所给文本传 `false`。首次读取可省略 `cursor`，后续使用同一终端返回的数字游标。
+4. 结束接管时，将回执中的 `nextRelease.arguments` 传给 `release_session`。它包含 `session_id` 和 `terminal_id`。
+
+若上一次提交结果未知，先读取终端输出，避免重复执行。
+
 ## 堡垒机 SSH 诊断
 
 在堡垒机临时会话中，打开底部「连接日志」，点击「保存本次 SSH 诊断」。JSON 记录面板交互、SSH 通道与消息类型、PTY 行列数和 SFTP 请求时间。诊断只保存协议元数据。拖动分隔线时本地终端随面板调整，松手后才同步有变化的最终行列数。
