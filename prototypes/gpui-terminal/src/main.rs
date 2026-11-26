@@ -69,9 +69,37 @@ fn main() {
     );
     let launch = orbitshell_ssh::launch::first_argument_link(&arguments);
     #[cfg(windows)]
-    if launch.is_some() && windows_launch::forward(&arguments) {
-        return;
-    }
+    let exit_for_update = arguments
+        .iter()
+        .any(|argument| argument == windows_launch::EXIT_FOR_UPDATE);
+    #[cfg(windows)]
+    let _instance = match windows_launch::start_or_forward(if launch.is_some() {
+        arguments.as_slice()
+    } else if exit_for_update {
+        arguments.as_slice()
+    } else {
+        &[]
+    }) {
+        Ok(Some(instance)) => {
+            if exit_for_update {
+                drop(instance);
+                return;
+            }
+            instance
+        }
+        Ok(None) => return,
+        Err(error) => {
+            if exit_for_update {
+                std::process::exit(if error == windows_launch::UPDATE_EXIT_CANCELLED {
+                    2
+                } else {
+                    1
+                });
+            }
+            windows_launch::show_startup_error(error);
+            return;
+        }
+    };
     drop(arguments);
     Application::new()
         .with_assets(WorkbenchAssets)

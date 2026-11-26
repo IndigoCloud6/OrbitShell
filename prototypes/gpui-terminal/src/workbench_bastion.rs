@@ -25,22 +25,27 @@ impl Workbench {
         }
         cx.spawn_in(window, async move |view, cx| {
             while let Some(arguments) = launches.recv().await {
-                let Some(launch) = first_argument_link(&arguments) else {
-                    continue;
-                };
+                let exit_for_update = arguments
+                    .iter()
+                    .any(|argument| argument == crate::windows_launch::EXIT_FOR_UPDATE);
+                let launch = first_argument_link(&arguments);
                 if view
                     .update_in(cx, |view, window, cx| {
-                        if view.external_launches.len() < 16 {
-                            view.external_launches.push_back(launch);
+                        if exit_for_update {
+                            view.request_desktop_exit(window, cx);
+                        } else {
                             view.show_desktop_window(window);
-                            cx.notify();
-                            cx.spawn(async |view, cx| {
-                                cx.background_executor()
-                                    .timer(Duration::from_secs(120))
-                                    .await;
-                                let _ = view.update(cx, |_, cx| cx.notify());
-                            })
-                            .detach();
+                            if let Some(launch) = launch && view.external_launches.len() < 16 {
+                                view.external_launches.push_back(launch);
+                                cx.notify();
+                                cx.spawn(async |view, cx| {
+                                    cx.background_executor()
+                                        .timer(Duration::from_secs(120))
+                                        .await;
+                                    let _ = view.update(cx, |_, cx| cx.notify());
+                                })
+                                .detach();
+                            }
                         }
                     })
                     .is_err()
