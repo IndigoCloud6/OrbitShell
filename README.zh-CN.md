@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/IndigoCloud6/OrbitShell/releases/latest/download/OrbitShell-windows-x64-setup.exe"><img src="https://img.shields.io/badge/Download-Windows%20x64-0969da?style=for-the-badge" alt="下载 Windows x64 安装包"></a>
+  <a href="https://github.com/IndigoCloud6/OrbitShell/releases/download/v0.2.1/OrbitShell-0.2.1-windows-x64-setup.exe"><img src="https://img.shields.io/badge/Download-Windows%20x64-0969da?style=for-the-badge" alt="下载 Windows x64 安装包"></a>
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@
 
 ## 在 Windows 上运行
 
-1. 下载并运行 [Windows x64 安装包](https://github.com/IndigoCloud6/OrbitShell/releases/latest/download/OrbitShell-windows-x64-setup.exe)。
+1. 下载并运行 [Windows x64 安装包](https://github.com/IndigoCloud6/OrbitShell/releases/download/v0.2.1/OrbitShell-0.2.1-windows-x64-setup.exe)。
 2. 从开始菜单打开 **OrbitShell**。首次连接时，与服务器管理员提供的 SSH 主机指纹核对。
 3. 如果堡垒机助手需要 Xshell 风格的客户端入口，选择安装目录下的 `Xshell.exe`。
 
@@ -38,7 +38,7 @@
 
 ## 从源码构建
 
-安装 Rust MSVC 工具链和 Visual Studio C++ Build Tools（含 Windows SDK）。默认的 `gpui` 分支使用 Cargo 构建。
+安装 Rust MSVC 工具链和 Visual Studio C++ Build Tools（含 Windows SDK）。默认的 `main` 分支使用 Cargo 构建。
 
 ```powershell
 git clone https://github.com/IndigoCloud6/OrbitShell.git
@@ -58,8 +58,8 @@ cargo build --release --locked --manifest-path prototypes/gpui-terminal/Cargo.to
 
 | 版本 | 源码 | 发布 |
 | --- | --- | --- |
-| Rust + GPUI | [`gpui`](https://github.com/IndigoCloud6/OrbitShell/tree/gpui)，默认分支 | [GPUI 最新版](https://github.com/IndigoCloud6/OrbitShell/releases/latest) |
-| 原 Tauri + React 版 | [`main`](https://github.com/IndigoCloud6/OrbitShell/tree/main) | [Tauri v0.1.0](https://github.com/IndigoCloud6/OrbitShell/releases/tag/v0.1.0) |
+| Rust + GPUI | [`main`](https://github.com/IndigoCloud6/OrbitShell/tree/main)，默认分支 | [GPUI 最新版](https://github.com/IndigoCloud6/OrbitShell/releases/latest) |
+| 原 Tauri + React 版 | [`tauri`](https://github.com/IndigoCloud6/OrbitShell/tree/tauri) | [Tauri v0.1.0](https://github.com/IndigoCloud6/OrbitShell/releases/tag/v0.1.0) |
 
 ## 开源协议
 
